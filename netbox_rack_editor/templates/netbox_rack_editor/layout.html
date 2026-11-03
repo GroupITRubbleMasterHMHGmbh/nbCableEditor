@@ -1,0 +1,97 @@
+{% extends 'base/layout.html' %}
+{% load static %}
+
+{% block title %}Port layout · {{ device_type }}{% endblock %}
+
+{% block head %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'netbox_rack_editor/layout.css' %}?v={{ editor_version }}">
+{% endblock %}
+
+{% block content %}
+  <div id="nre-layout" class="nre-layout" data-save-url="{{ save_url }}">
+    <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+      <div>
+        <div class="text-secondary">Device type · <a href="{{ device_type.get_absolute_url }}">{{ device_type }}</a></div>
+        <h1 class="mb-1">Port layout</h1>
+        <p class="text-secondary mb-0">Place ports once for this device type. All matching devices use these positions in the rack editor.</p>
+      </div>
+      {% if layout_data.canEdit %}
+        <button type="button" class="btn btn-primary" data-save disabled>Save layout</button>
+        {% csrf_token %}
+      {% endif %}
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="btn-group" role="group" aria-label="Device face">
+          <button type="button" class="btn btn-outline-primary active" data-face="front" aria-pressed="true">Front</button>
+          <button type="button" class="btn btn-outline-primary" data-face="rear" aria-pressed="false">Rear</button>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-3">
+          <label class="form-check mb-0">
+            <input class="form-check-input" type="checkbox" data-show-port-numbers checked{% if not layout_data.ports %} disabled{% endif %}>
+            <span class="form-check-label">Show port numbers</span>
+          </label>
+          <span class="text-secondary" data-count></span>
+        </div>
+      </div>
+      <div class="card-body">
+        {% if layout_data.canEdit and layout_data.ports %}
+          <div class="nre-layout-controls mb-3" data-controls>
+            <label class="form-label mb-0">First port
+              <select class="form-select no-ts mt-1" data-first></select>
+            </label>
+            <label class="form-label mb-0">Last port
+              <select class="form-select no-ts mt-1" data-last></select>
+            </label>
+            <label class="form-label mb-0">Columns
+              <input class="form-control mt-1" type="number" data-columns min="1" step="1">
+            </label>
+            <label class="form-label mb-0">Numbering
+              <select class="form-select no-ts mt-1" data-order>
+                <option value="rows">Across rows</option>
+                <option value="columns">Down columns</option>
+              </select>
+            </label>
+            <button class="btn btn-outline-secondary" type="button" data-place>Place centered</button>
+          </div>
+          <p class="small text-secondary mb-3" data-hint>
+            Choose a range, then drag a rectangle on the image to space the ports evenly.
+            Drag a marker to adjust it, or hold Shift while dragging to draw over existing markers.
+            Use arrow keys on a marker for small moves, or Delete to remove it.
+          </p>
+          <p class="text-secondary mb-3" data-empty-face hidden>No port templates can be placed on this face.</p>
+        {% elif not layout_data.ports %}
+          <p class="text-secondary mb-3">No interface, front port or rear port templates are visible for this device type.</p>
+        {% else %}
+          <p class="text-secondary mb-3">You can view this layout with your current permissions.</p>
+        {% endif %}
+        <div class="nre-layout-image-scroll">
+          <div class="nre-layout-stage" data-stage role="group" aria-label="Front layout">
+            <img class="nre-layout-image" data-image alt="" draggable="false" hidden>
+            <div class="nre-layout-placeholder" data-placeholder>No image for this face</div>
+            <div class="nre-layout-markers" data-markers></div>
+            <div class="nre-layout-preview" data-preview aria-hidden="true" hidden>
+              <div class="nre-layout-box" data-box></div>
+            </div>
+          </div>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+          <span class="text-secondary" data-selected>Select a marker to see its port.</span>
+          {% if layout_data.canEdit %}
+            <button class="btn btn-sm btn-outline-danger" type="button" data-remove hidden>Remove position</button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <p class="nre-layout-status mb-0" data-status role="status"></p>
+    <noscript><div class="alert alert-warning">Enable JavaScript to use the port layout editor.</div></noscript>
+  </div>
+  {{ layout_data|json_script:"nre-layout-data" }}
+{% endblock %}
+
+{% block javascript %}
+  {{ block.super }}
+  <script src="{% static 'netbox_rack_editor/layout.js' %}?v={{ editor_version }}" defer></script>
+{% endblock %}

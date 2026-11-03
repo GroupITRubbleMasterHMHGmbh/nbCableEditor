@@ -1,0 +1,3109 @@
+(() => {
+  "use strict";
+
+  const editor = document.getElementById("re-rack-editor");
+  if (!editor) return;
+
+  const data = JSON.parse(document.getElementById("re-rack-data").textContent);
+  const get = (name) => editor.querySelector("[data-" + name + "]");
+  const workspace = get("workspace");
+  const viewOptions = get("view-options");
+  const viewSummary = get("view-summary");
+  const viewConnections = get("view-connections");
+  const viewDirectory = get("view-directory");
+  const viewTrim = get("view-trim");
+  const connectionsSection = get("connections-section");
+  const directorySection = get("directory-section");
+  const viewPreferencesKey = "netbox-rack-editor:view";
+  const rackPreferencesKey = viewPreferencesKey + ":" + location.pathname;
+  const viewPreferences = readViewPreferences(viewPreferencesKey);
+  const rackPreferences = readViewPreferences(rackPreferencesKey);
+  const defaultGap = 20;
+  const maxGap = 120;
+  const gapStep = 4;
+  const savedGaps = new Map(Object.entries(rackPreferences.deviceGaps ?? {}).filter(
+    ([, size]) => Number.isInteger(size) && size >= 0 && size <= maxGap,
+  ));
+  const board = get("board");
+  const scroll = get("scroll");
+  const gutter = get("gutter");
+  const faceChoices = Array.from(editor.querySelectorAll("[data-rack-face-choice]"));
+  const facePanels = Array.from(board.querySelectorAll("[data-rack-face-panel]"));
+  const wires = get("wires");
+  const lines = get("lines");
+  const interfaceHighlight = get("interface-highlight");
+  const deviceImages = get("device-images");
+  const zoom = get("zoom");
+  const status = get("status");
+  const cancel = get("cancel");
+  const search = get("search");
+  const vlanQuery = get("vlan-query");
+  const vlanKind = get("vlan-kind");
+  const vlanClear = get("vlan-clear");
+  const vlanStatus = get("vlan-status");
+  const vlanLegend = get("vlan-legend");
+  const listFields = new Map();
+  for (const control of editor.querySelectorAll("[data-directory-field], [data-connection-field]")) {
+    const kind = control.hasAttribute("data-directory-field") ? "directory" : "connection";
+    listFields.set(kind + ":" + control.dataset[kind + "Field"], control);
+  }
+  const listFieldsKey = "netbox-rack-editor:list-fields";
+  const offImage = get("off-image");
+  const directory = get("directory");
+  const inspectorScroll = editor.querySelector(".re-rack-inspector-scroll");
+  const cableDetail = get("cable-detail");
+  const cableList = get("cable-list");
+  const deviceFilter = get("device-filter");
+  const deviceOptions = get("device-options");
+  const deviceSummary = get("device-filter-summary");
+  const deviceStatus = get("device-filter-status");
+  const deviceReset = get("device-reset");
+  const cableFocusClear = get("cable-focus-clear");
+  const rowFilter = get("port-row-filter");
+  const rowOptions = get("port-row-options");
+  const rowSummary = get("port-row-summary");
+  const rowStatus = get("port-row-status");
+  const rowReset = get("port-row-reset");
+  const quickButtons = Array.from(editor.querySelectorAll("[data-quick-mode]"));
+  const quickApply = get("quick-apply");
+  const quickClear = get("quick-clear");
+  const quickStatus = get("quick-status");
+  const quickCount = get("quick-count");
+  const historyUndo = get("history-undo");
+  const historyRedo = get("history-redo");
+  const historyOpen = get("history-open");
+  const historyDialog = get("history-dialog");
+  const historyList = get("history-list");
+  const historyError = get("history-error");
+  const tooltip = get("cable-tooltip");
+  const tooltipGuide = get("cable-tooltip-guide");
+  const tooltipDock = get("cable-tooltip-dock");
+  const guideLine = tooltipGuide.querySelector("path");
+  const guideRing = tooltipGuide.querySelector("circle");
+  const tooltipGeometry = globalThis.NetBoxRackTooltip;
+  const createDialog = get("cable-create");
+  const createForm = get("create-form");
+  const cableDefaultsKey = "netbox-rack-editor:cable-defaults";
+  const createError = get("create-error");
+  const contextMenu = get("context-menu");
+  const editDialog = get("cable-edit");
+  const editForm = get("edit-form");
+  const editError = get("edit-error");
+  const editSubmit = get("edit-submit");
+  const moveDialog = get("cable-move");
+  const moveForm = get("move-form");
+  const moveError = get("move-error");
+  const moveSubmit = moveForm.querySelector('[type="submit"]');
+  const detailsDialog = get("cable-modal");
+  const detailsContent = get("modal-content");
+  const deleteButton = get("modal-delete");
+  const deleteConfirm = get("modal-delete-confirm");
+  const deleteYes = get("modal-delete-yes");
+  const deleteCancel = get("modal-delete-cancel");
+  const detailsError = get("modal-error");
+  const cables = new Map(data.cables.map((cable) => [cable.id, cable]));
+  const ports = new Map();
+  const portIdsByDataset = new Map();
+  const {group, mountedTop} = globalThis.NetBoxRackRows;
+  const portRows = group(data);
+  const rowByPort = new Map(portRows.flatMap(row => row.ports.map(port => [port, row.id])));
+  const rowById = new Map(portRows.map(row => [row.id, row]));
+  const filters = new URLSearchParams(location.search);
+  const viewFilter = (name) => filters.get(name) ?? (typeof rackPreferences[name] === "string" ? rackPreferences[name] : "");
+  const savedRackFace = viewFilter("face");
+  let rackFace = savedRackFace === "rear" || savedRackFace === "both" ? savedRackFace : "front";
+  const hiddenRows = new Set(viewFilter("hiddenRows").split(",").filter(id => rowById.has(id)));
+  const requestedDevices = new Set(viewFilter("devices").split(","));
+  const focusedDevices = new Set(data.devices.filter(({id}) => requestedDevices.has(String(id))).map(({id}) => id));
+  let cableFocusDevice = data.devices.find(({id}) => String(id) === viewFilter("cableDevice")) ?? null;
+  const markers = new Map();
+  const directoryRows = [];
+  const vlanMatches = new Map();
+  const cableButtons = new Map();
+  const photos = new Map();
+  let elevationSpacing;
+  const SVG = "http://www.w3.org/2000/svg";
+  const mask = document.createElementNS(SVG, "mask");
+  mask.id = "re-rack-port-protection";
+  mask.setAttribute("maskUnits", "userSpaceOnUse");
+  const definitions = document.createElementNS(SVG, "defs");
+  definitions.append(mask);
+  const wireLayer = document.createElementNS(SVG, "g");
+  const traceLayer = document.createElementNS(SVG, "g");
+  const traceMarkers = new Set();
+  const traceDevices = new Set();
+  let tracePoints = [];
+  const hoverLayer = document.createElementNS(SVG, "g");
+  const handleLayer = document.createElementNS(SVG, "g");
+  const previewLayer = document.createElementNS(SVG, "g");
+  for (const layer of [wireLayer, traceLayer, hoverLayer, handleLayer, previewLayer]) {
+    layer.setAttribute("mask", "url(#" + mask.id + ")");
+  }
+  wires.append(definitions, wireLayer, traceLayer, hoverLayer, handleLayer, previewLayer);
+  const shownRoutes = new Map();
+  const occupancyLabels = {free: "Free", cabled: "Cabled", marked: "Marked connected", other: "Other occupancy"};
+
+  const historyData = data.history ?? {cursor: 0, revision: 0, entries: []};
+  const checkpoints = [{sequence: 0, label: "Initial state"}, ...historyData.entries];
+  checkpoints.sort((a, b) => a.sequence - b.sequence);
+  const checkpointIndex = checkpoints.findIndex(entry => entry.sequence === historyData.cursor);
+  const stagedDeletes = new Set();
+  const stagedConnections = new Map();
+  const stagedByPort = new Map();
+  const maxBatchSize = 100;
+
+  const savedQuickMode = history.state?.reRackQuickMode;
+  let quickMode = modeAllowed(savedQuickMode) ? savedQuickMode : "normal";
+  let quickSource = null;
+  let preferredSourceDevice = null;
+  let quickTargets = new Set();
+  let selectedCable = null;
+  let source = null;
+  let pending = null;
+  let createAction = null;
+  let contextTrigger = null;
+  let editingCable = null;
+  let editInitialValues = null;
+  let tooltipKey = null;
+  let hoveredCable = null;
+  let hoveredFromList = false;
+  let routes = null;
+  let geometryKey = null;
+  let geometryRoutes = null;
+  let geometry = null;
+  let previewRoute = null;
+  let routingWorker = null;
+  let workerUnavailable = false;
+  let activeJob = null;
+  let queuedJob = null;
+  let drawnRoutes = null;
+  let drawnMode = null;
+  let drawnSelection = null;
+  let gesture = null;
+  let dropTarget = null;
+  let suppressClick = false;
+  let busy = false;
+  let frame = 0;
+  let scrollFrame = 0;
+
+  function node(tag, className, label) {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (label) element.textContent = label;
+    return element;
+  }
+
+  function button(className, label) {
+    const element = node("button", className, label);
+    element.type = "button";
+    return element;
+  }
+
+  function httpUrl(value, allowRemote = false) {
+    if (!value) return null;
+    try {
+      const url = new URL(value, document.baseURI);
+      if (!["http:", "https:"].includes(url.protocol)) return null;
+      return allowRemote || url.origin === location.origin ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function link(value, label, className) {
+    const url = httpUrl(value);
+    const element = node(url ? "a" : "span", className, label);
+    if (url) element.href = url;
+    return element;
+  }
+
+  function idleMessage() {
+    if (!data.devices.length) return "No visible devices in this rack.";
+    if (!data.canAdd && !data.canChange) return "Read only. Select a cable to inspect its endpoints.";
+    return "Choose a port or inspect an existing connection.";
+  }
+
+  function announce(message, error = false) {
+    status.textContent = message;
+    status.toggleAttribute("data-error", error);
+    status.toggleAttribute("data-idle", !error && message === idleMessage());
+  }
+
+  function describe(port) {
+    return port ? port.device.name + " · " + port.name : "Endpoint outside this view";
+  }
+
+  function portState(port) {
+    if (port.occupancy === "cabled") return "connected";
+    return port.blocked ? "blocked" : "free";
+  }
+
+  function nativePortKind(port) {
+    if (port.kind === "front-port") return "Front port";
+    if (port.kind === "rear-port") return "Rear port";
+    return "";
+  }
+
+  function portAdminState(port) {
+    return nativePortKind(port) ? "" : port.enabled ? "Enabled" : "Disabled";
+  }
+
+  function portButton(port, marker) {
+    const className = "re-rack-port re-rack-port-" + portState(port);
+    const element = marker
+      ? button(className + " re-rack-port-marker")
+      : button(className + " btn btn-outline-secondary btn-sm");
+    const adminState = portAdminState(port);
+    const occupancy = occupancyLabels[port.occupancy] ?? "Unavailable";
+    if (marker) {
+      const text = port.label?.trim() || port.name.match(/\d+$/)?.[0] || port.name;
+      const label = node("span", "re-rack-port-label", text);
+      label.classList.toggle("re-rack-port-label-below", port.y >= 0.5);
+      if (/^\d{1,3}$/.test(text)) {
+        label.classList.add("re-rack-port-label-numeric");
+        label.dataset.digits = text.length;
+      }
+      label.setAttribute("aria-hidden", "true");
+      element.append(label);
+    } else {
+      const meta = node("span", "re-rack-port-meta");
+      meta.dataset.directoryValue = "status";
+      meta.hidden = !listFields.get("directory:status")?.checked;
+      if (adminState) {
+        meta.append(node("span", "re-rack-port-badge re-rack-port-badge-" + adminState.toLowerCase(), adminState));
+      }
+      meta.append(node("span", "re-rack-port-badge re-rack-port-badge-" + port.occupancy, occupancy));
+      element.append(node("span", "re-rack-dot"), node("span", "re-rack-port-name", port.name), meta);
+    }
+    const description = [describe(port), nativePortKind(port), adminState, occupancy].filter(Boolean).join(" · ");
+    element.setAttribute("aria-label", description);
+    element.setAttribute("aria-pressed", "false");
+    element.setAttribute("aria-haspopup", "menu");
+    element.dataset.port = port.id;
+    element.toggleAttribute("data-port-used", port.occupancy !== "free");
+    element.toggleAttribute("data-unrelated-port", dimPortForCableFocus(port));
+    return element;
+  }
+
+  function placeable(port) {
+    return Number.isFinite(port.x) && Number.isFinite(port.y) &&
+      (port.face === "front" || port.face === "rear");
+  }
+
+  function deviceInFocus(id) {
+    return !focusedDevices.size || focusedDevices.has(id);
+  }
+
+  function cableMatchesDevice(cable) {
+    return !cableFocusDevice || [cable.a, cable.b].some(id => ports.get(id)?.device.id === cableFocusDevice.id);
+  }
+
+  function dimPortForCableFocus(port) {
+    if (!cableFocusDevice || !port || port.device.id === cableFocusDevice.id || port.occupancy === "free") return false;
+    const cable = cables.get(port.cableId);
+    return !cable || !cableMatchesDevice(cable);
+  }
+
+  function portRowVisible(id) {
+    return !hiddenRows.has(rowByPort.get(id));
+  }
+
+  function rackSideOfPort(id) {
+    return rowById.get(rowByPort.get(id))?.rackFace;
+  }
+
+  function rackFaceVisible(face) {
+    return rackFace === "both" || rackFace === face;
+  }
+
+  function portFaceVisible(id) {
+    const face = rackSideOfPort(id);
+    return !face || rackFaceVisible(face);
+  }
+
+  function visibleMarker(id) {
+    const marker = markers.get(id);
+    return marker && !marker.hidden && portFaceVisible(id) ? marker : undefined;
+  }
+
+  function cableInFocus(cable) {
+    const a = ports.get(cable.a);
+    const b = ports.get(cable.b);
+    if ((a && !deviceInFocus(a.device.id)) || (b && !deviceInFocus(b.device.id))) return false;
+    if ((a && !portRowVisible(a.id)) || (b && !portRowVisible(b.id))) return false;
+    // A cable can be inspected from either side, even if only one of its markers is on screen.
+    return rackFace === "both" || Boolean((a && portFaceVisible(a.id)) || (b && portFaceVisible(b.id)));
+  }
+
+  function modeAllowed(mode) {
+    return mode === "normal" || (mode === "connect" && data.canAdd) || (mode === "unplug" && data.canDelete);
+  }
+
+  function stagedCount() {
+    return stagedDeletes.size + stagedConnections.size;
+  }
+
+  function quickPortVisible(port) {
+    return port && deviceInFocus(port.device.id) && portRowVisible(port.id) && portFaceVisible(port.id);
+  }
+
+  function cableHasPortInView(cable) {
+    return quickPortVisible(ports.get(cable.a)) || quickPortVisible(ports.get(cable.b));
+  }
+
+  function quickAvailable(port) {
+    return quickPortVisible(port) && !port.blocked && port.cableId === null && !stagedByPort.has(port.id);
+  }
+
+  function targetDevices(sourcePort) {
+    const candidates = new Set();
+    let sameDevice = false;
+    for (const port of ports.values()) {
+      if (port.id === sourcePort.id || !quickAvailable(port)) continue;
+      if (port.device.id === sourcePort.device.id) sameDevice = true;
+      else candidates.add(port.device.id);
+    }
+    if (!candidates.size && sameDevice) candidates.add(sourcePort.device.id);
+    return candidates;
+  }
+
+  function quickPrompt() {
+    if (quickMode === "unplug") return "Click a connected port to queue or cancel removal of its cable.";
+    if (quickMode !== "connect") return "";
+    if (!quickSource) {
+      if (preferredSourceDevice !== null) {
+        const device = data.devices.find(candidate => candidate.id === preferredSourceDevice);
+        return "Choose the next source port on " + device.name + " or another visible device.";
+      }
+      return "Choose a free source port. Click a queued pair to remove it from the queue.";
+    }
+    if (!quickTargets.size) return describe(quickSource) + " selected. No eligible target is visible.";
+    const target = quickTargets.size === 1
+      ? data.devices.find(device => quickTargets.has(device.id)).name : "a highlighted device";
+    return describe(quickSource) + " selected. Choose a free target port on " + target + ".";
+  }
+
+  function announceQuick(message = quickPrompt(), error = false) {
+    quickStatus.hidden = !message;
+    quickStatus.textContent = message;
+    quickStatus.toggleAttribute("data-error", error);
+  }
+
+  function warnStagedNavigation(event) {
+    event.preventDefault();
+    event.returnValue = true;
+  }
+
+  function updateQuickControls() {
+    const count = stagedCount();
+    const active = quickMode !== "normal";
+    board.dataset.cableMode = quickMode;
+    for (const control of quickButtons) {
+      const mode = control.dataset.quickMode;
+      control.setAttribute("aria-pressed", String(mode === quickMode));
+      control.classList.toggle("active", mode === quickMode);
+      control.disabled = busy || !modeAllowed(mode);
+    }
+    quickApply.hidden = quickClear.hidden = !active;
+    quickApply.disabled = busy || !count;
+    quickClear.disabled = busy || (!count && !quickSource);
+    quickCount.hidden = !count;
+    quickCount.textContent = count + " queued";
+    historyUndo.disabled = busy || count > 0 || checkpointIndex <= 0;
+    historyRedo.disabled = busy || count > 0 || checkpointIndex < 0 || checkpointIndex >= checkpoints.length - 1;
+    historyOpen.disabled = busy;
+    if (count) window.addEventListener("beforeunload", warnStagedNavigation);
+    else window.removeEventListener("beforeunload", warnStagedNavigation);
+  }
+
+  function refreshQuickView() {
+    quickTargets = quickSource ? targetDevices(quickSource) : new Set();
+    if (preferredSourceDevice !== null && !Array.from(ports.values()).some(port =>
+      port.device.id === preferredSourceDevice && quickAvailable(port)
+    )) preferredSourceDevice = null;
+    for (const element of editor.querySelectorAll("[data-port]")) {
+      const id = portIdsByDataset.get(element.dataset.port);
+      element.classList.toggle("re-rack-quick-add", stagedByPort.has(id));
+      element.classList.toggle("re-rack-quick-remove", stagedDeletes.has(ports.get(id)?.cableId));
+      element.classList.toggle("re-rack-quick-source", quickSource?.id === id);
+    }
+    for (const card of board.querySelectorAll("[data-rack-device]")) {
+      const id = Number(card.dataset.rackDevice);
+      card.classList.toggle("re-rack-quick-device-source", (quickSource?.device.id ?? preferredSourceDevice) === id);
+      card.classList.toggle("re-rack-quick-device-target", quickTargets.has(id));
+    }
+    for (const control of cableButtons.values()) control.disabled = quickMode !== "normal";
+    updateMarks();
+    updateQuickControls();
+    announceQuick();
+  }
+
+  function changeQuickMode(mode) {
+    if (busy || !modeAllowed(mode) || quickMode === mode) return;
+    if (stagedCount()) {
+      announceQuick("Apply or clear the queued changes before switching modes.", true);
+      return;
+    }
+    quickMode = mode;
+    quickSource = null;
+    preferredSourceDevice = null;
+    clearViewInteraction();
+    updateCableDetail();
+    history.replaceState({...history.state, reRackQuickMode: quickMode}, "");
+    refreshQuickView();
+  }
+
+  function queueUnplug(port) {
+    const cable = cables.get(port.cableId);
+    if (!cable?.deletable || !cableInFocus(cable) || !ports.has(cable.a) || !ports.has(cable.b)) {
+      announceQuick("Choose a port on an editable cable within the current device and row filters.", true);
+      return;
+    }
+    if (!stagedDeletes.delete(cable.id)) {
+      if (stagedCount() >= maxBatchSize) {
+        announceQuick("Apply these 100 changes before queuing more.", true);
+        return;
+      }
+      stagedDeletes.add(cable.id);
+    }
+    const stroke = wireLayer.querySelector('[data-wire-visual="' + cable.id + '"]');
+    stroke?.classList.toggle("re-rack-wire-staged-unplug", stagedDeletes.has(cable.id));
+    refreshQuickView();
+  }
+
+  function queueConnection(port) {
+    if (quickSource?.id === port.id) {
+      quickSource = null;
+    } else if (!quickSource && stagedByPort.has(port.id)) {
+      const operation = stagedByPort.get(port.id);
+      stagedConnections.delete(operation.source);
+      stagedByPort.delete(operation.source);
+      stagedByPort.delete(operation.target);
+    } else if (!quickAvailable(port)) {
+      announceQuick("Choose a free port that is not already queued.", true);
+      return;
+    } else if (stagedCount() >= maxBatchSize) {
+      announceQuick("Apply these 100 changes before queuing more.", true);
+      return;
+    } else if (!quickSource) {
+      quickSource = port;
+    } else {
+      if (!quickTargets.has(port.device.id)) {
+        announceQuick("Choose a free target port on a highlighted device.", true);
+        return;
+      }
+      const operation = {source: quickSource.id, target: port.id, cable_id: null};
+      stagedConnections.set(operation.source, operation);
+      stagedByPort.set(operation.source, operation);
+      stagedByPort.set(operation.target, operation);
+      preferredSourceDevice = quickSource.device.id;
+      quickSource = null;
+    }
+    refreshQuickView();
+  }
+
+  function clearQuickQueue() {
+    quickSource = null;
+    preferredSourceDevice = null;
+    stagedDeletes.clear();
+    for (const stroke of wireLayer.querySelectorAll(".re-rack-wire-staged-unplug")) {
+      stroke.classList.remove("re-rack-wire-staged-unplug");
+    }
+    stagedConnections.clear();
+    stagedByPort.clear();
+    refreshQuickView();
+  }
+
+  function applyQuickQueue() {
+    if (busy || !stagedCount()) return;
+    const deletes = Array.from(stagedDeletes, cable_id => ({action: "delete", cable_id}));
+    save({action: "batch", operations: [...deletes, ...stagedConnections.values()]});
+  }
+
+  function navigateHistory(target) {
+    if (busy || stagedCount() || target === undefined || target === historyData.cursor) return;
+    save({action: "history", target, revision: historyData.revision}, historyDialog.open ? historyError : null);
+  }
+
+  function showHistory() {
+    if (busy) return;
+    setError(historyError, stagedCount() ? "Apply or clear the queued changes before restoring a checkpoint." : "");
+    const entries = document.createDocumentFragment();
+    for (const checkpoint of checkpoints) {
+      const current = checkpoint.sequence === historyData.cursor;
+      const entry = button("re-rack-history-entry" + (current ? " re-rack-history-current" : ""));
+      entry.dataset.historyTarget = checkpoint.sequence;
+      entry.disabled = current || stagedCount() > 0;
+      if (current) entry.setAttribute("aria-current", "step");
+      entry.append(node("span", "fw-semibold", checkpoint.label || "Checkpoint " + checkpoint.sequence));
+      if (checkpoint.timestamp) {
+        const stamp = new Date(checkpoint.timestamp);
+        const text = Number.isNaN(stamp.valueOf()) ? checkpoint.timestamp : stamp.toLocaleString();
+        const time = node("time", "text-muted small", text);
+        time.dateTime = checkpoint.timestamp;
+        entry.append(time);
+      }
+      entry.addEventListener("click", () => navigateHistory(checkpoint.sequence));
+      entries.append(entry);
+    }
+    historyList.replaceChildren(entries);
+    historyDialog.showModal();
+  }
+
+  function adjacentDeviceBoundaries(mounted) {
+    const boundaries = [];
+    let occupiedEnd = -Infinity;
+    let physicalEnd;
+    for (const {device, top, physicalTop} of [...mounted].sort((a, b) => a.top - b.top)) {
+      // A gap may only start where no device on either visible face straddles it.
+      if (top === occupiedEnd) boundaries.push({top, key: physicalEnd + ":" + physicalTop, controls: []});
+      if (top + device.height > occupiedEnd) {
+        occupiedEnd = top + device.height;
+        physicalEnd = physicalTop + device.height;
+      }
+    }
+    return boundaries;
+  }
+
+  function gapControl(gap, location) {
+    const group = node("div", "re-rack-gap-control");
+    group.dataset.rackGap = gap.key;
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Virtual gap " + location);
+    const minus = button("", "−");
+    const plus = button("", "+");
+    for (const [control, direction, action] of [[minus, -1, "Decrease"], [plus, 1, "Increase"]]) {
+      control.dataset.gapStep = direction;
+      control.setAttribute("aria-label", action + " virtual gap " + location);
+      control.addEventListener("click", () => {
+        if (busy || gesture) return;
+        const size = savedGaps.get(gap.key) ?? defaultGap;
+        const next = Math.max(0, Math.min(maxGap, size + gapStep * direction));
+        if (next === size) return;
+        savedGaps.set(gap.key, next);
+        hideWireTooltip();
+        applyElevationSpacing();
+        invalidateRoutes();
+        saveRackPreferences();
+      });
+    }
+    group.append(minus, plus);
+    gap.controls.push({group, minus, plus});
+    return group;
+  }
+
+  function applyElevationSpacing() {
+    if (!elevationSpacing) return;
+    const {gaps, rows, cards, focused} = elevationSpacing;
+    const scale = Number(zoom.value);
+    const defaultsVisible = focused || scale > 1;
+    const beforeRow = new Map();
+    const insideRow = new Map();
+    let extraHeight = 0;
+    for (const gap of gaps) {
+      const active = defaultsVisible || savedGaps.has(gap.key);
+      const base = savedGaps.get(gap.key) ?? defaultGap;
+      const size = active ? base * scale : 0;
+      if (active) {
+        if (Number.isInteger(gap.top)) beforeRow.set(gap.top, size);
+        else insideRow.set(Math.floor(gap.top), size);
+      }
+      for (const {group, minus, plus} of gap.controls) {
+        group.hidden = !active;
+        group.style.top = "calc(var(--re-rack-unit) * " + gap.top + " + " + extraHeight + "px)";
+        group.style.setProperty("--re-rack-gap-size", size + "px");
+        minus.disabled = base <= 0;
+        plus.disabled = base >= maxGap;
+      }
+      extraHeight += size;
+      gap.offsetAfter = extraHeight;
+    }
+    board.style.setProperty("--re-rack-extra-height", extraHeight + "px");
+    for (const {index, tick} of rows) {
+      tick.style.setProperty("--re-rack-row-before", (beforeRow.get(index) ?? 0) + "px");
+      tick.style.setProperty("--re-rack-row-inside", (insideRow.get(index) ?? 0) + "px");
+      tick.toggleAttribute("data-rack-gap-controls", insideRow.has(index));
+    }
+    for (const {top, card} of cards) {
+      const offset = gaps.findLast(gap => gap.top <= top)?.offsetAfter ?? 0;
+      card.style.setProperty("--re-device-offset", offset + "px");
+    }
+  }
+
+  function drawElevations() {
+    invalidateRoutes();
+    const startingUnit = data.startingUnit ?? 1;
+    const mounted = [];
+    for (const device of data.devices) {
+      if (!deviceInFocus(device.id)) continue;
+      const top = mountedTop(data, device);
+      if (top !== null && (device.fullDepth || rackFaceVisible(device.face))) mounted.push({device, top});
+    }
+
+    // Both faces use the same physical-to-visible row map, including any half-unit offsets.
+    const rows = Array.from({length: data.height}, (_, row) => row).filter((row) =>
+      !focusedDevices.size || mounted.some(({device, top}) => row < top + device.height && row + 1 > top)
+    );
+    const compactIndex = new Map(rows.map((row, index) => [row, index]));
+    const projected = mounted.map(({device, top}) => {
+      const row = Math.floor(top);
+      return {device, top: compactIndex.get(row) + (top - row), physicalTop: top};
+    });
+    const gaps = adjacentDeviceBoundaries(projected);
+    const rowNumber = row => startingUnit + (data.descUnits ? row : data.height - row - 1);
+    elevationSpacing = {gaps, rows: [], cards: [], focused: focusedDevices.size > 1 && mounted.length > 1};
+    board.style.setProperty("--re-rack-height", Math.max(1, rows.length));
+    markers.clear();
+    photos.clear();
+
+    for (const face of ["front", "rear"]) {
+      const elevation = editor.querySelector('[data-elevation="' + face + '"]');
+      elevation.replaceChildren();
+      if (!rackFaceVisible(face)) continue;
+      if (!rows.length) {
+        elevation.append(node("p", "re-rack-elevation-empty text-muted small m-0 p-2",
+          "No selected devices are mounted on this side."));
+        continue;
+      }
+      for (const [index, row] of rows.entries()) {
+        const tick = node("div", "re-rack-row");
+        tick.append(node("span", "", String(rowNumber(row))));
+        elevationSpacing.rows.push({index, tick});
+        elevation.append(tick);
+      }
+      for (const gap of gaps) {
+        const lower = rowNumber(rows[Math.floor(gap.top)]);
+        const location = Number.isInteger(gap.top)
+          ? "between U " + rowNumber(rows[gap.top - 1]) + " and U " + lower
+          : "within U " + lower;
+        elevation.append(gapControl(gap, location));
+      }
+
+      for (const {device, top} of projected) {
+        if (device.face !== face && !device.fullDepth) continue;
+        const side = device.face === face ? "front" : "rear";
+        const card = node("div", "re-rack-device");
+        card.dataset.routeObstacle = device.id + ":" + face;
+        card.dataset.rackDevice = device.id;
+        card.style.setProperty("--re-device-top", top);
+        card.style.setProperty("--re-device-height", device.height);
+        elevationSpacing.cards.push({top, card});
+        const label = link(device.url, device.name, "re-rack-device-name");
+        label.title = device.name;
+        const tools = node("div", "re-rack-device-tools");
+        const focus = button("re-rack-cable-focus-button");
+        focus.dataset.cableFocusDevice = device.id;
+        focus.setAttribute("aria-label", "Show only cables from this device: " + device.name);
+        focus.title = "Show only cables from this device";
+        focus.setAttribute("aria-pressed", String(device === cableFocusDevice));
+        focus.append(node("i", "mdi mdi-filter-variant"));
+        focus.firstChild.setAttribute("aria-hidden", "true");
+        focus.addEventListener("click", () => setCableFocus(device === cableFocusDevice ? null : device));
+        tools.append(focus, label);
+        const photo = node("div", "re-rack-photo");
+        const photoUrl = httpUrl(device[side + "Image"], true);
+        let image = null;
+        if (photoUrl) {
+          image = node("img");
+          image.alt = "";
+          image.draggable = false;
+          image.addEventListener("load", invalidateRoutes);
+          image.addEventListener("error", invalidateRoutes);
+          image.src = photoUrl;
+          photo.append(image);
+        }
+        photos.set(card, {photo, image});
+        for (const rawPort of device.ports) {
+          const port = ports.get(rawPort.id);
+          if (port.face !== side || !placeable(port)) continue;
+          const marker = portButton(port, true);
+          marker.hidden = !portRowVisible(port.id);
+          marker.style.left = (port.x * 100) + "%";
+          marker.style.top = (port.y * 100) + "%";
+          photo.append(marker);
+          markers.set(port.id, marker);
+        }
+        card.append(photo, tools);
+        elevation.append(card);
+      }
+    }
+    applyElevationSpacing();
+  }
+
+  function restoreListFields() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(listFieldsKey));
+      for (const [key, control] of listFields) {
+        if (typeof saved?.[key] === "boolean") control.checked = saved[key];
+      }
+    } catch {
+      // Browser preferences are optional.
+    }
+  }
+
+  function listField(kind, key, label, value) {
+    const field = node("span", "re-rack-" + kind + "-field");
+    field.dataset[kind + "Value"] = key;
+    field.hidden = !listFields.get(kind + ":" + key)?.checked;
+    field.append(node("span", "re-rack-list-meta-label", label + " "), value);
+    return field;
+  }
+
+  function appendListField(container, kind, key, label, value) {
+    if (value) container.append(listField(kind, key, label, value));
+  }
+
+  function cableEndpoint(cable, end) {
+    const local = ports.get(cable[end.toLowerCase()]);
+    if (local) return local;
+    const remote = cable["endpoint" + end];
+    return remote ? {
+      ...remote,
+      name: remote.portName,
+      device: {name: remote.deviceName, deviceType: remote.deviceType, rackName: remote.rackName},
+    } : null;
+  }
+
+  function listEndpointName(port) {
+    return describe(port) + (port?.device.rackName ? " · Rack " + port.device.rackName : "");
+  }
+
+  function vlanText(port) {
+    if (!port) return "";
+    const label = vlan => vlan.name ? vlan.vid + " (" + vlan.name + ")" : String(vlan.vid);
+    const values = [];
+    if (port.untaggedVlan) values.push("Untagged " + label(port.untaggedVlan));
+    if (port.taggedVlans?.length) values.push("Tagged " + port.taggedVlans.map(label).join(", "));
+    if (port.vlanMode === "tagged-all") values.push("Tagged all");
+    if (port.vlanMode === "q-in-q") values.push("Q-in-Q");
+    if (!values.length && port.vlanMode === "access") values.push("Access");
+    if (!values.length && port.vlanMode === "tagged") values.push("Tagged mode");
+    return values.join(" · ");
+  }
+
+  function listCableColor(cable) {
+    const color = cableHex(cable).toUpperCase();
+    const entry = node("span", "re-rack-list-color");
+    if (color) {
+      const swatch = node("span", "re-rack-swatch");
+      swatch.style.backgroundColor = color;
+      swatch.setAttribute("aria-hidden", "true");
+      entry.append(swatch);
+    }
+    entry.append(cableColorLabel(color));
+    return entry;
+  }
+
+  function drawDirectory() {
+    const fragment = document.createDocumentFragment();
+    for (const device of data.devices) {
+      const group = node("div", "re-rack-directory-device");
+      const heading = node("h3", "re-rack-directory-heading");
+      heading.append(link(device.url, device.name));
+      if (device.layoutUrl) {
+        heading.append(link(device.layoutUrl, "Port layout", "re-rack-layout-link"));
+      }
+      const list = node("div", "re-rack-directory-ports");
+      const entries = device.ports.map(({id}) => {
+        const port = ports.get(id);
+        const entry = node("div", "re-rack-directory-entry");
+        entry.dataset.portDirectoryId = id;
+        const element = portButton(port, false);
+        const details = node("div", "re-rack-directory-details");
+        const cable = cables.get(port.cableId);
+        let peerName = "";
+        if (cable) {
+          const peer = cableEndpoint(cable, cable.a === id ? "B" : "A");
+          peerName = listEndpointName(peer);
+          const peerLine = node("span", "re-rack-directory-peer");
+          peerLine.append(node("span", "re-rack-list-meta-label", "Peer "), peerName);
+          details.append(peerLine, listCableColor(cable));
+          appendListField(details, "directory", "peer-vlan", "Peer VLAN", vlanText(peer));
+        } else if (port.occupancy === "cabled") {
+          details.append(node("span", "re-rack-directory-peer", "Connection details unavailable"));
+        }
+        appendListField(details, "directory", "vlan", "VLAN", vlanText(port));
+        const type = [nativePortKind(port), port.type].filter(Boolean).join(" · ");
+        appendListField(details, "directory", "type", "Type", type);
+        appendListField(details, "directory", "label", "Label", port.label);
+        appendListField(details, "directory", "description", "Description", port.description);
+        const badge = node("span", "re-rack-vlan-badge");
+        badge.hidden = true;
+        details.append(badge);
+        details.id = "re-rack-directory-details-" + id;
+        element.setAttribute("aria-describedby", details.id);
+        entry.append(element, details);
+        list.append(entry);
+        const searchText = [port.name, port.label, port.description, peerName].filter(Boolean).join(" ").toLowerCase();
+        return {port, entry, badge, searchText};
+      });
+      if (!entries.length) list.append(node("span", "text-muted small", "No visible ports."));
+      group.append(heading, list);
+      directoryRows.push({device, group, entries});
+      fragment.append(group);
+    }
+    fragment.append(node("p", "text-muted small mb-0", "No matching ports."));
+    directory.append(fragment);
+    filterDirectory();
+  }
+
+  function filterDirectory() {
+    const query = search.value.trim().toLowerCase();
+    const vid = vlanId();
+    let matches = false;
+    for (const {device, group, entries} of directoryRows) {
+      if (!deviceInFocus(device.id)) {
+        group.hidden = true;
+        continue;
+      }
+      const deviceMatches = device.name.toLowerCase().includes(query);
+      let hasVisible = false;
+      for (const {port, entry, badge, searchText} of entries) {
+        const match = vlanMatches.get(port.id);
+        markVlanMatch(entry, match, badge, vid);
+        entry.hidden = !portRowVisible(port.id) || !portFaceVisible(port.id) ||
+          (offImage.checked && markers.has(port.id)) ||
+          (!deviceMatches && !searchText.includes(query)) || (vid !== null && !match);
+        hasVisible ||= !entry.hidden;
+      }
+      group.hidden = entries.length || vid !== null ? !hasVisible : !deviceMatches;
+      matches ||= !group.hidden;
+    }
+    directory.lastElementChild.hidden = matches;
+  }
+
+  function cableHex(cable) {
+    const color = cable.color?.replace(/^#/, "");
+    return /^[0-9a-f]{6}$/i.test(color ?? "") ? "#" + color : "";
+  }
+
+  function cableColorLabel(color) {
+    if (!color) return "No color set";
+    const name = createForm.querySelector('[data-color-value="' + color + '"]')?.getAttribute("aria-label");
+    return name ? name + " · " + color : color;
+  }
+
+  function cableColor(cable) {
+    const color = cableHex(cable);
+    if (color) return color;
+    // Use the same automatic HSL colors as before, represented as sRGB hex.
+    const hue = ((cable.id * 137.508) % 360) / 60;
+    const lightness = .52;
+    const chroma = (1 - Math.abs(2 * lightness - 1)) * .72;
+    const second = chroma * (1 - Math.abs(hue % 2 - 1));
+    const rgb = [
+      [chroma, second, 0], [second, chroma, 0], [0, chroma, second],
+      [0, second, chroma], [second, 0, chroma], [chroma, 0, second],
+    ][Math.floor(hue)];
+    return "#" + rgb.map(channel =>
+      Math.round(255 * (channel + lightness - chroma / 2)).toString(16).padStart(2, "0")
+    ).join("");
+  }
+
+  function cableStrokes(stroke, color, cableId) {
+    const [r, g, b] = [1, 3, 5].map(offset => {
+      const value = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
+      return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
+    });
+    const luminance = .2126 * r + .7152 * g + .0722 * b;
+    // Midtones remain unoutlined; CSS selects the low-contrast end for each theme.
+    const tone = luminance > .30 ? "light" : luminance < .14 ? "dark" : null;
+    if (!tone) return [stroke];
+    const outline = wire(stroke.getAttribute("d"), "re-rack-wire-contrast re-rack-wire-contrast-" + tone);
+    outline.dataset.wireContrast = cableId;
+    return [outline, stroke];
+  }
+
+  function cableName(cable) {
+    return cable.label || "Cable #" + cable.id;
+  }
+
+  function canMove(cable) {
+    return !!(data.canChange && cable?.editable && ports.has(cable.a) && ports.has(cable.b));
+  }
+
+  function drawCableList() {
+    cableList.replaceChildren();
+    cableButtons.clear();
+    for (const cable of cables.values()) {
+      if (!cableMatchesDevice(cable) || !cableHasPortInView(cable)) continue;
+      const name = cableName(cable);
+      const row = button("btn btn-outline-secondary btn-sm re-rack-cable-button");
+      const heading = node("span", "re-rack-connection-name", name);
+      heading.append(listCableColor(cable));
+      const endpoints = node("span", "re-rack-connection-endpoints");
+      endpoints.id = "re-rack-connection-endpoints-" + cable.id;
+      const fields = node("span", "re-rack-connection-fields");
+      for (const end of ["A", "B"]) {
+        const port = cableEndpoint(cable, end);
+        const endpoint = node("span", "re-rack-connection-end");
+        endpoint.append(node("span", "re-rack-list-meta-label", end + " "), listEndpointName(port));
+        endpoints.append(endpoint);
+        appendListField(fields, "connection", "vlan", end + " VLAN", vlanText(port));
+      }
+      for (const [key, label] of [
+        ["type", "Type"], ["status", "Status"], ["length", "Length"], ["profile", "Profile"],
+        ["description", "Description"],
+      ]) appendListField(fields, "connection", key, label, cable[key]);
+      const badge = node("span", "re-rack-vlan-badge");
+      badge.hidden = true;
+      row.append(heading, endpoints, fields, badge);
+      row.dataset.cableListId = cable.id;
+      row.setAttribute("aria-label", name);
+      row.setAttribute("aria-describedby", endpoints.id);
+      row.setAttribute("aria-pressed", "false");
+      row.setAttribute("aria-haspopup", "menu");
+      row.addEventListener("click", () => openCableDetails(cable));
+      cableButtons.set(cable.id, row);
+      cableList.append(row);
+    }
+    cableList.append(node("p", "text-muted small mb-0"));
+    filterCableList();
+  }
+
+  function vlanId() {
+    const text = vlanQuery.value.trim();
+    const vid = Number(text);
+    return /^\d{1,4}$/.test(text) && vid >= 1 && vid <= 4094 ? vid : null;
+  }
+
+  function markVlanMatch(element, match, badge, vid) {
+    element.classList.toggle("re-rack-vlan-match", Boolean(match));
+    if (match) element.dataset.vlanMatch = match;
+    else delete element.dataset.vlanMatch;
+    if (!badge) return;
+    badge.hidden = !match;
+    if (match) {
+      const kind = {tagged: "Tagged", untagged: "Untagged", both: "Tagged and untagged"}[match];
+      badge.textContent = kind + " · VLAN " + vid;
+    }
+  }
+
+  function filterCableList() {
+    const vid = vlanId();
+    const active = vid !== null;
+    let count = 0;
+    for (const [id, row] of cableButtons) {
+      const cable = cables.get(id);
+      const a = vlanMatches.get(cable.a);
+      const b = vlanMatches.get(cable.b);
+      const match = a && b && a !== b ? "both" : a || b;
+      markVlanMatch(row, match, row.querySelector(".re-rack-vlan-badge"), vid);
+      row.hidden = active && !match;
+      if (!row.hidden) count++;
+    }
+    get("cable-count").textContent = count;
+    const empty = cableList.lastElementChild;
+    empty.hidden = count > 0;
+    if (!count) {
+      empty.textContent = active ? "No connections match this VLAN in the current view."
+        : "No visible connections in this rack view.";
+    }
+  }
+
+  function refreshVlanMatches() {
+    const vid = vlanId();
+    const raw = vlanQuery.value.trim();
+    const kind = vlanKind.value;
+    vlanMatches.clear();
+    let freeUntagged = 0;
+    if (vid !== null) {
+      for (const port of ports.values()) {
+        if (!quickPortVisible(port)) continue;
+        const tagged = kind !== "untagged" && port.taggedVlans?.some(vlan => vlan.vid === vid);
+        const untagged = kind !== "tagged" && port.untaggedVlan?.vid === vid;
+        if (!tagged && !untagged) continue;
+        vlanMatches.set(port.id, tagged && untagged ? "both" : tagged ? "tagged" : "untagged");
+        if (untagged && port.enabled && !port.blocked && port.cableId === null) freeUntagged++;
+      }
+    }
+    for (const [id, marker] of markers) markVlanMatch(marker, vlanMatches.get(id));
+    vlanClear.hidden = !raw && kind === "any";
+    if (vlanLegend) vlanLegend.hidden = vid === null;
+    if (raw && vid === null) vlanQuery.setAttribute("aria-invalid", "true");
+    else vlanQuery.removeAttribute("aria-invalid");
+    if (vid === null) {
+      vlanStatus.textContent = raw ? "Enter a VLAN ID from 1 to 4094." : "";
+      return;
+    }
+    const count = vlanMatches.size;
+    vlanStatus.textContent = count + (count === 1 ? " port" : " ports") + " with VLAN " + vid +
+      (kind !== "tagged" ? " · " + freeUntagged + " free and enabled untagged" : "");
+  }
+
+  function applyVlanFilter() {
+    hideWireTooltip();
+    refreshVlanMatches();
+    filterDirectory();
+    filterCableList();
+    persistViewFilters();
+  }
+
+  function cableTraces(cable) {
+    return [["A", cable?.traceA], ["B", cable?.traceB]].filter(([, trace]) => trace);
+  }
+
+  function renderCableTrace(cable, compact = false) {
+    const traces = cableTraces(cable);
+    if (!traces.length) return null;
+    const section = node("div", "re-rack-trace");
+    section.append(node("span", "re-rack-trace-label", "Cable trace"));
+    const statusLabels = {
+      complete: "Connected endpoint",
+      open: "Open endpoint",
+      restricted: "Further path not visible",
+      split: "Multiple path branches",
+      unsupported: "Further path unavailable",
+      truncated: "Longer path in NetBox",
+    };
+
+    for (const [end, trace] of traces) {
+      const chain = node("div", "re-rack-trace-chain");
+      chain.dataset.traceDirection = end;
+      chain.append(node("span", "re-rack-trace-label", "Toward end " + end));
+      const hops = compact ? trace.hops.slice(1) : trace.hops;
+      const visible = compact && hops.length > 4
+        ? [hops[0], hops[1], null, ...hops.slice(-2)] : hops;
+      visible.forEach((hop, index) => {
+        if (index) chain.append(node("span", "re-rack-trace-more", "→"));
+        if (!hop) {
+          chain.append(node("span", "re-rack-trace-more", "…"));
+          return;
+        }
+        const sameDevice = visible[index - 1]?.deviceName === hop.deviceName &&
+          visible[index - 1]?.rackName === hop.rackName;
+        const name = sameDevice ? hop.portName : hop.deviceName + " · " + hop.portName;
+        chain.append(node("span", index === visible.length - 1 ? "re-rack-trace-end" : "", name));
+      });
+      const status = trace.status === "complete" && trace.active === false
+        ? "Endpoint on inactive path" : statusLabels[trace.status];
+      if (status) chain.append(node("span", "re-rack-trace-more", status));
+      section.append(chain);
+    }
+    return section;
+  }
+
+  function updateCableDetail() {
+    cableDetail.replaceChildren();
+    cableDetail.hidden = !selectedCable;
+    cableDetail.className = "re-rack-cable-detail";
+    for (const [id, element] of cableButtons) {
+      element.setAttribute("aria-pressed", String(selectedCable?.id === id));
+      element.classList.toggle("active", selectedCable?.id === id);
+    }
+    if (!selectedCable) return;
+
+    const cable = selectedCable;
+    const header = link(cable.url, cableName(cable), "fw-semibold");
+    const detail = node("div", "text-muted small", cable.status || "Cable");
+    cableDetail.append(header, detail);
+    for (const [side, portId] of [["A", cable.a], ["B", cable.b]]) {
+      const port = ports.get(portId);
+      const row = node("div", "re-rack-cable-end");
+      const label = side + " · " + (port
+        ? describeCableEnd(portId) : listEndpointName(cableEndpoint(cable, side)));
+      const marker = visibleMarker(portId);
+      if (marker) {
+        const locate = button("btn btn-link btn-sm p-0 text-start", label);
+        locate.addEventListener("click", () => locateMarker(marker));
+        row.append(locate);
+      } else {
+        row.append(node("span", "small", label));
+        appendShowSide(row, portId, cable);
+      }
+      if (canMove(cable) && !port.blocked && portRowVisible(portId) && portFaceVisible(portId)) {
+        const move = button("btn btn-outline-secondary btn-sm", "Move " + side);
+        move.setAttribute("aria-label", "Move " + describe(port));
+        move.addEventListener("click", () => chooseSource(port));
+        row.append(move);
+      }
+      cableDetail.append(row);
+    }
+    const trace = renderCableTrace(cable);
+    if (trace) cableDetail.append(trace);
+    if (!canMove(cable)) {
+      cableDetail.append(node("span", "text-muted small", "Moving an end is unavailable in this editor."));
+    }
+  }
+
+  function describeCableEnd(portId) {
+    const face = rackSideOfPort(portId);
+    return describe(ports.get(portId)) + (face ? " · Rack " + face : "");
+  }
+
+  function appendShowSide(container, portId, cable) {
+    const port = ports.get(portId);
+    const face = rackSideOfPort(portId);
+    if (!port || !face || rackFaceVisible(face) || !deviceInFocus(port.device.id) || !portRowVisible(portId)) return;
+    const show = button("btn btn-outline-secondary btn-sm", face === "rear" ? "Show Rear" : "Show Front");
+    show.addEventListener("click", () => {
+      if (busy) return;
+      if (detailsDialog.open) detailsDialog.close();
+      applyRackFace(face);
+      selectCable(cable);
+      requestAnimationFrame(() => {
+        const marker = visibleMarker(portId);
+        if (marker) locateMarker(marker);
+      });
+    });
+    container.append(show);
+  }
+
+  function setError(element, message = "") {
+    element.textContent = message;
+    element.hidden = !message;
+  }
+
+  function showDeleteConfirm(show) {
+    deleteConfirm.hidden = !show;
+    deleteButton.hidden = show || !selectedCable?.deletable;
+    if (show) deleteCancel.focus();
+  }
+
+  function cableRouteEndpoint(cable, end, portId) {
+    const endpoint = node("div", "re-rack-detail-endpoint");
+    endpoint.setAttribute("role", "group");
+    endpoint.setAttribute("aria-label", "End " + end);
+    const badge = node("span", "re-rack-detail-end-badge", end);
+    badge.setAttribute("aria-hidden", "true");
+    endpoint.append(badge);
+
+    const port = cableEndpoint(cable, end);
+    if (!port) {
+      endpoint.append(node("p", "re-rack-detail-position", describe(port)));
+      return endpoint;
+    }
+
+    const {device} = port;
+    endpoint.append(node("p", "re-rack-detail-device", device.name));
+    if (device.deviceType) endpoint.append(node("p", "re-rack-detail-model", device.deviceType));
+    const interfaceLabel = port.label?.trim();
+    const interfaceName = interfaceLabel && interfaceLabel !== port.name
+      ? port.name + " · " + interfaceLabel : port.name;
+    endpoint.append(node("p", "re-rack-detail-interface", interfaceName));
+    if (!ports.has(portId)) {
+      const location = data.devices.some(candidate => candidate.id === port.deviceId) ? "Port not placed on rack image"
+        : device.rackName ? "Rack " + device.rackName : "Outside this rack";
+      endpoint.append(node("p", "re-rack-detail-position", location));
+      return endpoint;
+    }
+
+    const side = rackSideOfPort(portId);
+    const location = [];
+    if (side) location.push(side === "front" ? "Rack Front" : "Rack Rear");
+    if (mountedTop(data, device) !== null) {
+      location.push("U " + device.position);
+      if (!side) location.push("Port not placed on rack image");
+    } else {
+      location.push("Device not mounted");
+    }
+    endpoint.append(node("p", "re-rack-detail-position", location.join(" · ")));
+
+    const marker = visibleMarker(portId);
+    if (marker) {
+      const locate = button("btn btn-outline-secondary btn-sm re-rack-detail-locate", "Show in rack");
+      locate.addEventListener("click", () => {
+        detailsDialog.close();
+        locateMarker(marker);
+      });
+      endpoint.append(locate);
+    } else {
+      appendShowSide(endpoint, portId, cable);
+    }
+    return endpoint;
+  }
+
+  function openCableDetails(cable) {
+    if (busy || pending || !cable || !cableMatchesDevice(cable) || quickMode !== "normal") return;
+    hideWireTooltip();
+    selectCable(cable);
+
+    const heading = node("div", "re-rack-detail-heading");
+    heading.append(node("p", "re-rack-detail-name", cableName(cable)));
+    if (cable.status) heading.append(node("span", "re-rack-detail-status", cable.status));
+
+    const route = node("div", "re-rack-detail-route");
+    route.setAttribute("role", "group");
+    route.setAttribute("aria-label", "Cable route from end A to end B");
+    const connector = node("div", "re-rack-detail-connector");
+    connector.setAttribute("aria-hidden", "true");
+    route.append(cableRouteEndpoint(cable, "A", cable.a), connector, cableRouteEndpoint(cable, "B", cable.b));
+
+    const color = cableHex(cable).toUpperCase();
+    const colorValue = node("span", "re-rack-detail-color");
+    if (color) {
+      route.style.setProperty("--re-detail-cable-color", color);
+      const swatch = node("span", "re-rack-detail-swatch");
+      swatch.style.backgroundColor = color;
+      swatch.setAttribute("aria-hidden", "true");
+      colorValue.append(swatch, cableColorLabel(color));
+    } else {
+      route.setAttribute("data-uncolored", "");
+      colorValue.textContent = "Not specified";
+    }
+
+    const properties = node("dl", "re-rack-detail-properties");
+    const info = [
+      ["Type", cable.type || "Not specified"],
+      ["Color", colorValue],
+      ["Length", cable.length || "Not specified"],
+      ["Profile", cable.profile],
+      ["Description", cable.description],
+    ];
+    for (const [key, value] of info) {
+      if (!value) continue;
+      const property = node("div", key === "Description" ? "re-rack-detail-property-wide" : "");
+      const detail = node("dd");
+      detail.append(value);
+      property.append(node("dt", "", key), detail);
+      properties.append(property);
+    }
+
+    detailsContent.replaceChildren(heading, route);
+    const trace = renderCableTrace(cable);
+    if (trace) detailsContent.append(trace);
+    detailsContent.append(properties, link(cable.url, "Open cable in NetBox"));
+    setError(detailsError);
+    showDeleteConfirm(false);
+    detailsDialog.showModal();
+  }
+
+  function openCreateDialog(action) {
+    hideWireTooltip();
+    createAction = action;
+    createForm.reset();
+    try {
+      const defaults = JSON.parse(localStorage.getItem(cableDefaultsKey));
+      if (data.cableTypes.some(({value}) => value === defaults?.type)) {
+        createForm.elements.type.value = defaults.type;
+      }
+      if (typeof defaults?.color === "string" && /^[0-9a-f]{6}$/i.test(defaults.color)) {
+        createForm.elements.color.value = "#" + defaults.color;
+      }
+    } catch {
+      // If storage is unavailable or unreadable, use the form's empty defaults.
+    }
+    setError(createError);
+    get("create-summary").textContent = describe(action.source) + " → " + describe(action.target);
+    createDialog.showModal();
+  }
+
+  function cableEditValues() {
+    const values = Object.fromEntries(new FormData(editForm));
+    values.color = values.color.replace(/^#/, "").toUpperCase();
+    return values;
+  }
+
+  function openCableEdit(cable, field = "label") {
+    editingCable = cable;
+    editForm.reset();
+    editForm.elements.label.value = cable.label ?? "";
+    editForm.elements.color.value = cableHex(cable).toUpperCase();
+    restoreSelect(editForm.elements.type, cable.typeValue);
+    restoreSelect(editForm.elements.status, cable.statusValue);
+    editForm.elements.description.value = cable.description ?? "";
+    editInitialValues = cableEditValues();
+    get("edit-endpoints").textContent = ["A", "B"].map(end => listEndpointName(cableEndpoint(cable, end))).join(" → ");
+    setError(editError);
+    editDialog.showModal();
+    editForm.elements[field].focus();
+    editForm.elements[field].select();
+  }
+
+  function closeContextMenu(restoreFocus = false) {
+    if (contextMenu.hidden) return;
+    contextMenu.hidden = true;
+    contextMenu.replaceChildren();
+    contextTrigger?.removeAttribute("aria-expanded");
+    if (restoreFocus && contextTrigger?.isConnected) contextTrigger.focus({preventScroll: true});
+    contextTrigger = null;
+    hideWireTooltip();
+  }
+
+  function openContextMenu(event, keyboard = false) {
+    if (busy || pending || gesture?.moved) return;
+    const target = event.target;
+    const entry = target.closest("[data-port-directory-id]");
+    const port = portAt(target) ?? ports.get(portIdsByDataset.get(entry?.dataset.portDirectoryId));
+    const row = target.closest("[data-cable-list-id]");
+    const candidate = port ? cables.get(port.cableId) : row ? cables.get(Number(row.dataset.cableListId)) : cableAt(event);
+    const cable = candidate && cableMatchesDevice(candidate) ? candidate : null;
+    if (!port && !cable) return;
+
+    const menu = document.createDocumentFragment();
+    const normal = quickMode === "normal";
+    const trigger = target.closest("[data-port], [data-cable-list-id]") ?? entry?.querySelector("[data-port]");
+    const add = (label, run, danger = false) => {
+      const item = button("re-rack-context-action" + (danger ? " re-rack-context-danger" : ""), label);
+      item.setAttribute("role", "menuitem");
+      item.tabIndex = -1;
+      item.addEventListener("click", () => {
+        closeContextMenu(true);
+        run();
+      });
+      menu.append(item);
+    };
+    const divider = () => {
+      const item = node("div", "re-rack-context-divider");
+      item.setAttribute("role", "separator");
+      menu.append(item);
+    };
+
+    const heading = port ? describe(port) : cableName(cable);
+    const detail = port
+      ? [nativePortKind(port), portAdminState(port), occupancyLabels[port.occupancy]].filter(Boolean).join(" · ")
+      : ["A", "B"].map(end => listEndpointName(cableEndpoint(cable, end))).join(" → ");
+    const title = node("div", "re-rack-context-heading");
+    const color = cable && cableHex(cable);
+    if (color) {
+      const swatch = node("span", "re-rack-context-color");
+      swatch.style.backgroundColor = color;
+      swatch.setAttribute("aria-hidden", "true");
+      title.append(swatch);
+    }
+    title.append(heading);
+    menu.append(title, node("div", "re-rack-context-detail", detail));
+    if (port) {
+      if (normal && canStart(port)) {
+        add(port.cableId === null ? "Connect from here" : "Move cable end", () => chooseSource(port));
+      }
+      const marker = visibleMarker(port.id);
+      const directoryPort = directory.querySelector('[data-port="' + port.id + '"]');
+      if (marker && trigger !== marker) {
+        add("Show in rack", () => locateMarker(marker));
+      } else if (!directorySection.hidden && directoryPort && !directoryPort.closest("[hidden]")) {
+        add("Find in interface directory", () => {
+          directorySection.open = true;
+          directoryPort.scrollIntoView({block: "nearest", inline: "nearest"});
+          directoryPort.focus({preventScroll: true});
+        });
+      }
+      const other = cable && visibleMarker(cable.a === port.id ? cable.b : cable.b === port.id ? cable.a : null);
+      if (other) add("Show other end", () => locateMarker(other));
+      const url = httpUrl(port.url);
+      const kind = nativePortKind(port).toLowerCase() || "interface";
+      if (url) add("Open " + kind + " in NetBox", () => location.assign(url));
+    }
+    if (cable) {
+      if (menu.querySelector("[role=menuitem]")) divider();
+      if (normal) {
+        add("Cable details", () => openCableDetails(cable));
+        if (data.canChange && cable.editable) {
+          add("Edit cable…", () => openCableEdit(cable));
+          add("Change color…", () => openCableEdit(cable, "color"));
+        }
+        if (!port) {
+          for (const [end, id] of [["A", cable.a], ["B", cable.b]]) {
+            const endpoint = ports.get(id);
+            if (endpoint && canStart(endpoint)) add("Move end " + end, () => chooseSource(endpoint));
+          }
+        }
+      }
+      const url = httpUrl(cable.url);
+      if (url) add("Open cable in NetBox", () => location.assign(url));
+      if (normal && data.canDelete && cable.deletable) {
+        divider();
+        add("Delete connection…", () => {
+          openCableDetails(cable);
+          showDeleteConfirm(true);
+        }, true);
+      }
+    }
+    const first = menu.querySelector("[role=menuitem]");
+    if (!first) return;
+
+    event.preventDefault();
+    closeContextMenu();
+    hideWireTooltip();
+    if (cable) highlightCable(cable, port);
+    contextTrigger = trigger ?? scroll;
+    if (contextTrigger !== scroll) contextTrigger.setAttribute("aria-expanded", "true");
+    const kind = port ? nativePortKind(port) || "Interface" : "Cable";
+    contextMenu.setAttribute("aria-label", kind + " actions for " + heading);
+    contextMenu.replaceChildren(menu);
+    contextMenu.hidden = false;
+    const anchor = target.getBoundingClientRect();
+    const x = keyboard || (!event.clientX && !event.clientY) ? anchor.left : event.clientX;
+    const y = keyboard || (!event.clientX && !event.clientY) ? anchor.bottom : event.clientY;
+    const {width, height} = contextMenu.getBoundingClientRect();
+    const {clientWidth, clientHeight} = document.documentElement;
+    const margin = 8;
+    contextMenu.style.left = Math.max(margin, Math.min(x, clientWidth - width - margin)) + "px";
+    contextMenu.style.top = Math.max(margin, Math.min(y, clientHeight - height - margin)) + "px";
+    first.focus({preventScroll: true});
+  }
+
+  function locateMarker(marker) {
+    const origin = board.getBoundingClientRect();
+    const target = point(marker, origin);
+    scroll.scrollTo(target.x - scroll.clientWidth / 2, target.y - scroll.clientHeight / 2);
+    marker.focus({preventScroll: true});
+  }
+
+  function point(element, origin) {
+    const rect = element.getBoundingClientRect();
+    return {x: rect.left + rect.width / 2 - origin.left, y: rect.top + rect.height / 2 - origin.top};
+  }
+
+  function pathData(points) {
+    return points.map(({x, y}, index) => (index ? "L " : "M ") + x + " " + y).join(" ");
+  }
+
+  function wire(d, className, color) {
+    const element = document.createElementNS(SVG, "path");
+    element.setAttribute("d", d);
+    element.setAttribute("class", className);
+    if (color) element.setAttribute("stroke", color);
+    return element;
+  }
+
+  function gripPoint(points, distance) {
+    for (let index = 1; index < points.length; index++) {
+      const from = points[index - 1];
+      const to = points[index];
+      const length = Math.hypot(to.x - from.x, to.y - from.y);
+      if (length >= distance) {
+        const ratio = distance / length;
+        return {x: from.x + (to.x - from.x) * ratio, y: from.y + (to.y - from.y) * ratio};
+      }
+      distance -= length;
+    }
+    return points.at(-1);
+  }
+
+  function cableHandle(cable, portId, x, y, color) {
+    function circle(radius, className) {
+      const element = document.createElementNS(SVG, "circle");
+      element.setAttribute("cx", x);
+      element.setAttribute("cy", y);
+      element.setAttribute("r", radius);
+      element.setAttribute("class", className);
+      return element;
+    }
+
+    const hit = circle(9, "re-rack-wire-handle");
+    hit.dataset.wire = cable.id;
+    hit.dataset.cableEnd = portId;
+    const visible = circle(3.5, "re-rack-wire-handle-visible");
+    visible.setAttribute("fill", color);
+    return [hit, visible];
+  }
+
+  function distanceToPath(point, path) {
+    let closest = Infinity;
+    for (let index = 1; index < path.length; index++) {
+      const from = path[index - 1];
+      const to = path[index];
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const squaredLength = dx * dx + dy * dy;
+      const projection = squaredLength
+        ? Math.min(1, Math.max(0, ((point.x - from.x) * dx + (point.y - from.y) * dy) / squaredLength))
+        : 0;
+      closest = Math.min(closest, (point.x - from.x - dx * projection) ** 2 +
+        (point.y - from.y - dy * projection) ** 2);
+    }
+    return closest;
+  }
+
+  function cableAt(event) {
+    const hit = event.target?.closest?.("[data-wire]");
+    const cable = hit ? cables.get(Number(hit.dataset.wire)) : null;
+    if (!cable || !cableMatchesDevice(cable)) return null;
+    if (hit.hasAttribute("data-cable-end")) return cable;
+
+    // Wider hit strokes make narrow cables easier to click. In an overlap, use the nearest visible line.
+    const origin = board.getBoundingClientRect();
+    const pointer = {x: event.clientX - origin.left, y: event.clientY - origin.top};
+    let closest = cable;
+    let distance = distanceToPath(pointer, shownRoutes.get(cable.id));
+    for (const [id, path] of shownRoutes) {
+      if (id === cable.id) continue;
+      const candidate = distanceToPath(pointer, path);
+      if (candidate + 0.01 < distance) {
+        distance = candidate;
+        closest = cables.get(id);
+      }
+    }
+    return closest;
+  }
+
+  let hoveredPort = null;
+  let hoverPoints = [];
+  let hoverFrom = null;
+  let hoverIsStub = false;
+  let tooltipPlacement = null;
+
+  function pointerEnds(cable, x, y, nearPort = null) {
+    if (nearPort) {
+      const farEnd = nearPort.id === cable.a ? "B" : nearPort.id === cable.b ? "A" : null;
+      return [{port: farEnd ? cableEndpoint(cable, farEnd) : null}, {port: nearPort}];
+    }
+    return ["A", "B"].map(end => {
+      const port = cableEndpoint(cable, end);
+      const marker = visibleMarker(port?.id);
+      if (!marker) return {port, distance: Infinity};
+      const {x: endX, y: endY} = point(marker, {left: 0, top: 0});
+      return {port, distance: Math.hypot(x - endX, y - endY)};
+    }).sort((a, b) => a.distance === b.distance ? 0 : b.distance - a.distance);
+  }
+
+  function stubPoints(portId, marker) {
+    const boardRect = board.getBoundingClientRect();
+    const start = point(marker, boardRect);
+    const across = start.x <= boardRect.width / 2 ? 1 : -1;
+    const down = ports.get(portId)?.y < 0.5 ? 1 : -1;
+    const diagonal = Math.SQRT1_2;
+    const directions = [
+      [across, 0], [0, down], [0, -down], [-across, 0],
+      [across * diagonal, down * diagonal], [-across * diagonal, down * diagonal],
+      [across * diagonal, -down * diagonal], [-across * diagonal, -down * diagonal],
+    ];
+    let longest = 0;
+    let end = start;
+    for (const [dx, dy] of directions) {
+      const toEdge = (at, step, limit) => step > 0 ? (limit - at) / step : step < 0 ? -at / step : Infinity;
+      let length = Math.min(32, toEdge(start.x, dx, boardRect.width), toEdge(start.y, dy, boardRect.height));
+      for (const area of geometry?.protectedAreas ?? []) {
+        if (area.port === portId && area.kind === "port") continue;
+        let entry = 0;
+        let exit = length;
+        for (const [at, step, low, high] of [
+          [start.x, dx, area.left - 2, area.right + 2],
+          [start.y, dy, area.top - 2, area.bottom + 2],
+        ]) {
+          if (!step) {
+            if (at < low || at > high) exit = -1;
+            continue;
+          }
+          const first = (low - at) / step;
+          const last = (high - at) / step;
+          entry = Math.max(entry, Math.min(first, last));
+          exit = Math.min(exit, Math.max(first, last));
+        }
+        if (entry < exit) length = entry;
+      }
+      if (length <= longest) continue;
+      longest = length;
+      end = {x: start.x + dx * length, y: start.y + dy * length};
+      if (length === 32) break;
+    }
+    const radius = marker.getBoundingClientRect().height / 2;
+    if (longest >= radius + 5) return [start, end];
+
+    // Dense rows can leave no visible straight exit. Turn into the gap between rows.
+    const turn = {x: start.x, y: Math.max(0, Math.min(boardRect.height, start.y + down * (radius + 1.5)))};
+    end = {x: Math.max(0, Math.min(boardRect.width, turn.x + across * 24)), y: turn.y};
+    return [start, turn, end];
+  }
+
+  function visibleCablePath(cable, preferredPortId) {
+    const a = visibleMarker(cable.a);
+    const b = visibleMarker(cable.b);
+    if (a && b) {
+      const points = routes?.get(cable.id);
+      return points ? {points, from: cable.a, stub: false} : null;
+    }
+    const from = [preferredPortId, cable.a, cable.b].find(id => visibleMarker(id));
+    if (from === undefined) return null;
+    return {points: stubPoints(from, visibleMarker(from)), from, stub: true};
+  }
+
+  function drawTracePreview(cable) {
+    for (const marker of traceMarkers) marker.classList.remove("re-rack-trace-end-highlight");
+    traceMarkers.clear();
+    for (const card of traceDevices) card.classList.remove("re-rack-trace-device-highlight");
+    traceDevices.clear();
+    tracePoints = [];
+    traceLayer.replaceChildren();
+    const traces = cableTraces(cable);
+    if (!traces.length) return;
+
+    const seen = new Set([cable.id]);
+    function mark(portId) {
+      if (portId === cable.a || portId === cable.b || dimPortForCableFocus(ports.get(portId))) return;
+      const marker = visibleMarker(portId);
+      if (!marker) return;
+      marker.classList.add("re-rack-trace-end-highlight");
+      traceMarkers.add(marker);
+    }
+
+    for (const [, trace] of traces) {
+      for (const {portId, deviceId, kind} of trace.hops) {
+        mark(portId);
+        if (kind === "interface" || !Number.isInteger(deviceId)) continue;
+        for (const card of board.querySelectorAll('[data-rack-device="' + deviceId + '"]')) {
+          card.classList.add("re-rack-trace-device-highlight");
+          traceDevices.add(card);
+        }
+      }
+      for (const segment of trace.segments) {
+        if (seen.has(segment.id)) continue;
+        if (cableFocusDevice && !cableMatchesDevice(cables.get(segment.id) ?? segment)) continue;
+        seen.add(segment.id);
+        mark(segment.a);
+        mark(segment.b);
+        const visible = visibleCablePath(segment);
+        if (!visible) continue;
+        tracePoints.push(visible.points);
+        const stroke = wire(pathData(visible.points), "re-rack-wire-trace");
+        stroke.dataset.traceWire = segment.id;
+        traceLayer.append(stroke);
+      }
+    }
+    // A trace can continue outside the drawing even when only this end is placed.
+    if (!tracePoints.length) {
+      const direct = visibleCablePath(cable);
+      if (!direct?.stub) return;
+      const {x, y} = direct.points.at(-1);
+      const hint = document.createElementNS(SVG, "circle");
+      hint.setAttribute("class", "re-rack-trace-continuation");
+      hint.setAttribute("cx", x);
+      hint.setAttribute("cy", y);
+      hint.setAttribute("r", "3.5");
+      traceLayer.append(hint);
+    }
+  }
+
+  function highlightCable(cable, port = null) {
+    if (cable && !cableMatchesDevice(cable)) return;
+    if (cable === hoveredCable && port === hoveredPort) return;
+    if (hoveredCable) {
+      for (const id of [hoveredCable.a, hoveredCable.b, hoveredPort?.id]) {
+        markers.get(id)?.classList.remove("re-rack-end-highlight");
+      }
+      for (const grip of handleLayer.querySelectorAll('[data-wire="' + hoveredCable.id + '"]')) {
+        grip.nextElementSibling.classList.remove("re-rack-wire-handle-hovered");
+      }
+    }
+    hoveredCable = cable;
+    hoveredPort = port;
+    hoverPoints = [];
+    hoverFrom = null;
+    hoverIsStub = false;
+    resetTooltipPlacement();
+    hoverLayer.replaceChildren();
+    wires.classList.toggle("re-rack-wires-hovering", Boolean(cable));
+    drawTracePreview(cable ?? selectedCable);
+    if (!cable) return;
+    for (const id of [cable.a, cable.b, port?.id]) {
+      visibleMarker(id)?.classList.add("re-rack-end-highlight");
+    }
+    for (const grip of handleLayer.querySelectorAll('[data-wire="' + cable.id + '"]')) {
+      grip.nextElementSibling.classList.add("re-rack-wire-handle-hovered");
+    }
+    const visible = visibleCablePath(cable, port?.id);
+    if (!visible) return;
+    hoverPoints = visible.points;
+    hoverFrom = visible.from;
+    hoverIsStub = visible.stub;
+    const path = pathData(hoverPoints);
+    if (!visible.stub) hoverLayer.append(wire(path, "re-rack-wire-casing"));
+    const className = "re-rack-wire re-rack-wire-hovered" + (visible.stub ? " re-rack-wire-hover-stub" : "");
+    const color = cableColor(cable);
+    const stroke = wire(path, className, color);
+    stroke.dataset.wireHighlight = cable.id;
+    hoverLayer.append(...cableStrokes(stroke, color, cable.id));
+  }
+
+  function resetTooltipPlacement() {
+    tooltipPlacement = null;
+    tooltip.removeAttribute("data-compact");
+    if (tooltip.hasAttribute("data-docked")) {
+      tooltip.removeAttribute("data-docked");
+      tooltipGuide.after(tooltip);
+      tooltipDock.hidden = true;
+    }
+    tooltipGuide.setAttribute("hidden", "");
+  }
+
+  function drawTooltipGuide(anchor, edge) {
+    tooltipGuide.toggleAttribute("hidden", !anchor || !edge);
+    if (!anchor || !edge) return;
+    guideLine.setAttribute("d", pathData([anchor, edge]));
+    guideRing.setAttribute("cx", anchor.x);
+    guideRing.setAttribute("cy", anchor.y);
+  }
+
+  function positionWireTooltip(event) {
+    const viewport = {right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight};
+    const frame = scroll.getBoundingClientRect();
+    const origin = board.getBoundingClientRect();
+    const clip = {
+      left: Math.max(0, frame.left + scroll.clientLeft),
+      top: Math.max(0, frame.top + scroll.clientTop),
+      right: Math.min(viewport.right, frame.left + scroll.clientLeft + scroll.clientWidth),
+      bottom: Math.min(viewport.bottom, frame.top + scroll.clientTop + scroll.clientHeight),
+    };
+    const screenSegments = points => tooltipGeometry.visibleSegments(
+      points.map(({x, y}) => ({x: x + origin.left, y: y + origin.top})), clip,
+    );
+    const segments = screenSegments(hoverPoints);
+    const obstacles = segments.concat(tracePoints.flatMap(screenSegments));
+    const pointer = {x: event.clientX, y: event.clientY};
+    let probe = pointer;
+    if (hoverIsStub) {
+      const {x, y} = hoverPoints.at(-1);
+      probe = {x: x + origin.left, y: y + origin.top};
+    } else if (hoveredPort && hoverPoints.length) {
+      const from = hoveredPort.id !== hoverFrom && visibleMarker(hoveredPort.id)
+        ? hoverPoints.slice().reverse() : hoverPoints;
+      const {x, y} = gripPoint(from, 12);
+      probe = {x: x + origin.left, y: y + origin.top};
+    }
+    const anchor = tooltipGeometry.nearestPoint(segments, probe);
+
+    if (!tooltip.hasAttribute("data-docked")) {
+      const margin = 8;
+      const bounds = {left: margin, top: margin, right: viewport.right - margin, bottom: viewport.bottom - margin};
+      function findPlace() {
+        const {width, height} = tooltip.getBoundingClientRect();
+        return tooltipGeometry.place({
+          anchor: anchor ?? pointer, width, height, bounds, segments: obstacles, previous: tooltipPlacement,
+        });
+      }
+      let placement = findPlace();
+      if (!placement && !tooltip.hasAttribute("data-compact")) {
+        tooltip.setAttribute("data-compact", "");
+        placement = findPlace();
+      }
+      if (placement) {
+        tooltipPlacement = placement;
+        tooltip.style.left = placement.left + "px";
+        tooltip.style.top = placement.top + "px";
+        drawTooltipGuide(anchor, placement.edge);
+        return;
+      }
+
+      // If no rectangle can fit beside this wire, the inspector keeps the drawing clear.
+      tooltip.setAttribute("data-docked", "");
+      tooltipDock.append(tooltip);
+      tooltipDock.hidden = false;
+    }
+
+    const rect = tooltip.getBoundingClientRect();
+    const edge = anchor && {
+      x: Math.max(rect.left, Math.min(rect.right, anchor.x)),
+      y: Math.max(rect.top, Math.min(rect.bottom, anchor.y)),
+    };
+    const edgeVisible = edge && edge.x >= 0 && edge.x <= viewport.right && edge.y >= 0 && edge.y <= viewport.bottom;
+    drawTooltipGuide(anchor, edgeVisible ? edge : null);
+  }
+
+  function hideWireTooltip() {
+    tooltip.hidden = true;
+    tooltipKey = null;
+    hoveredFromList = false;
+    highlightCable(null);
+  }
+
+  function listHoverOrigin(cable) {
+    const a = ports.get(cable.a);
+    const b = ports.get(cable.b);
+    const aInView = Boolean(quickPortVisible(a));
+    const bInView = Boolean(quickPortVisible(b));
+    if (aInView === bInView) return null;
+    return aInView ? a : b;
+  }
+
+  function offviewEndpointLabel(port) {
+    if (!port || visibleMarker(port.id)) return "";
+    const device = port.id ? port.device : data.devices.find(candidate => candidate.id === port.deviceId);
+    if (!device) return port.device.rackName ? "Rack " + port.device.rackName : "Outside this rack";
+
+    const mounted = mountedTop(data, device) !== null;
+    let reason = "Port not placed on rack image";
+    if (!deviceInFocus(device.id)) reason = "Device hidden by filter";
+    else if (!mounted) reason = "Device not mounted";
+    else if (!portFaceVisible(port.id)) reason = "Rack side not shown";
+    else if (!portRowVisible(port.id)) reason = "Port row hidden";
+    return mounted ? reason + " · U " + device.position : reason;
+  }
+
+  function showWireTooltip(event) {
+    if (!contextMenu.hidden) return;
+    if (gesture || busy || event.pointerType === "touch") {
+      hideWireTooltip();
+      return;
+    }
+    const target = event.target instanceof Element ? event.target : null;
+    const row = target?.closest("[data-cable-list-id]");
+    const listedCable = row && cableList.contains(row) ? cables.get(Number(row.dataset.cableListId)) : null;
+    if (listedCable && !hoveredFromList) hideWireTooltip();
+    hoveredFromList = Boolean(listedCable);
+    const entry = target?.closest("[data-port-directory-id]");
+    const directoryPort = entry && directory.contains(entry) ? ports.get(portIdsByDataset.get(entry.dataset.portDirectoryId)) : null;
+    const port = listedCable ? null : portAt(target) ?? directoryPort;
+    const cable = listedCable ?? (port ? cables.get(port.cableId) : cableAt(event));
+    if (!cable || !cableMatchesDevice(cable)) {
+      hideWireTooltip();
+      return;
+    }
+    highlightCable(cable, port);
+    if (listedCable && !cable.traceA && !cable.traceB && visibleMarker(cable.a) && visibleMarker(cable.b)) {
+      tooltip.hidden = true;
+      tooltipKey = null;
+      return;
+    }
+    const from = listedCable ? listHoverOrigin(cable) : port;
+    const [far, near] = pointerEnds(cable, event.clientX, event.clientY, from);
+    const key = JSON.stringify([cable.id, far.port?.id, near.port?.id]);
+    if (key !== tooltipKey) {
+      const peer = far.port;
+      tooltip.replaceChildren(node("div", "re-rack-tooltip-peer", peer?.device.name ?? describe(peer)));
+      if (peer) {
+        const side = rackSideOfPort(peer.id);
+        const sideName = side === "front" ? "Front" : side === "rear" ? "Rear" : "";
+        const details = [peer.device.deviceType, peer.name, sideName].filter(Boolean);
+        tooltip.append(node("div", "re-rack-tooltip-detail", details.join(" · ")));
+        const location = offviewEndpointLabel(peer);
+        if (location) tooltip.append(node("div", "re-rack-tooltip-detail re-rack-tooltip-offview", location));
+      }
+      if (near.port) tooltip.append(node("div", "re-rack-tooltip-detail", "↔ " + describe(near.port)));
+      const meta = [cable.label, cable.type, cableHex(cable)].filter(Boolean);
+      if (meta.length) tooltip.append(node("div", "re-rack-tooltip-detail", meta.join(" · ")));
+      const trace = renderCableTrace(cable, true);
+      if (trace) tooltip.append(trace);
+      const accent = cableColor(cable);
+      tooltip.style.setProperty("--re-rack-tooltip-accent", accent);
+      tooltipGuide.style.setProperty("--re-rack-tooltip-accent", accent);
+      tooltipKey = key;
+    }
+    tooltip.hidden = false;
+    positionWireTooltip(event);
+  }
+
+  function wirePortAt(event) {
+    const handle = event.target.closest("[data-cable-end]");
+    if (handle) return ports.get(portIdsByDataset.get(handle.dataset.cableEnd));
+    const cable = cableAt(event);
+    if (!canMove(cable)) return null;
+    const [, near] = pointerEnds(cable, event.clientX, event.clientY);
+    return near.distance <= 28 ? near.port : null;
+  }
+
+  function fitPhotos() {
+    const trim = viewTrim.checked;
+    const scrollLeft = scroll.scrollLeft;
+    // Measure the ordinary rack layout, even when a previous crop is active.
+    board.removeAttribute("data-trimmed");
+    const layouts = new Map();
+    for (const [card, {photo, image}] of photos) {
+      const rect = card.getBoundingClientRect();
+      const hasImage = Boolean(image?.naturalWidth && image?.naturalHeight);
+      const scale = hasImage ? Math.min(rect.width / image.naturalWidth, rect.height / image.naturalHeight) : 1;
+      const width = hasImage ? image.naturalWidth * scale : rect.width;
+      const height = hasImage ? image.naturalHeight * scale : rect.height;
+      layouts.set(card, {photo, rect, width, height, fixed: hasImage || trim});
+    }
+    for (const {photo, width, height, fixed} of layouts.values()) {
+      photo.style.width = fixed ? width + "px" : "";
+      photo.style.height = fixed ? height + "px" : "";
+    }
+    if (!trim || !layouts.size) return;
+
+    // Use the same cuts in each face's local coordinates. Include the marker and
+    // its label, with room for the stroke and end grips.
+    let left = Infinity;
+    let right = Infinity;
+    const clearance = 12;
+    for (const [id, marker] of markers) {
+      if (!visibleMarker(id)) continue;
+      const {rect: card} = layouts.get(marker.closest("[data-route-obstacle]"));
+      const rect = marker.getBoundingClientRect();
+      const label = marker.querySelector(".re-rack-port-label")?.getBoundingClientRect();
+      const first = label?.width ? Math.min(rect.left, label.left) : rect.left;
+      const last = label?.width ? Math.max(rect.right, label.right) : rect.right;
+      left = Math.min(left, first - card.left - clearance);
+      right = Math.min(right, card.right - last - clearance);
+    }
+    if (!Number.isFinite(left)) return;
+    left = Math.max(0, Math.floor(left));
+    right = Math.max(0, Math.floor(right));
+    const cut = left + right;
+    if (!cut) return;
+
+    // Keep very sparse cards wide enough to identify the device.
+    const shortestCard = Math.min(...Array.from(layouts.values(), ({rect}) => rect.width));
+    const maxCut = Math.max(0, shortestCard - 96);
+    const ratio = Math.min(1, maxCut / cut);
+    left = Math.floor(left * ratio);
+    right = Math.floor(right * ratio);
+    if (!left && !right) return;
+
+    const fullWidth = board.getBoundingClientRect().width;
+    const faceCount = rackFace === "both" ? 2 : 1;
+    for (const {photo, rect, width} of layouts.values()) {
+      photo.style.setProperty("--re-rack-trim-photo-left", ((rect.width - width) / 2 - left) + "px");
+    }
+    workspace.style.setProperty("--re-rack-trim-width", (fullWidth - faceCount * (left + right)) + "px");
+    board.setAttribute("data-trimmed", "");
+    scroll.scrollLeft = scrollLeft;
+  }
+
+  function relativeRect(element, origin) {
+    const {left, top, right, bottom} = element.getBoundingClientRect();
+    const stable = (value) => Math.round(value * 100) / 100;
+    return {
+      left: stable(left - origin.left), top: stable(top - origin.top),
+      right: stable(right - origin.left), bottom: stable(bottom - origin.top),
+    };
+  }
+
+  function growRect(rect, padding) {
+    return {left: rect.left - padding, top: rect.top - padding,
+      right: rect.right + padding, bottom: rect.bottom + padding};
+  }
+
+  function cutoutPath({kind, rect}) {
+    const {left, top, right, bottom} = growRect(rect, kind === "port" ? .5 : 1);
+    if (kind === "label") return "M " + left + " " + top + " H " + right + " V " + bottom + " H " + left + " Z";
+    const y = (top + bottom) / 2;
+    const arc = " A " + (right - left) / 2 + " " + (bottom - top) / 2 + " 0 1 1 ";
+    return "M " + left + " " + y + arc + right + " " + y + arc + left + " " + y + " Z";
+  }
+
+  function updatePortMask(bounds, cuts) {
+    mask.setAttribute("x", 0);
+    mask.setAttribute("y", 0);
+    mask.setAttribute("width", bounds.width);
+    mask.setAttribute("height", bounds.height);
+    const surface = document.createElementNS(SVG, "rect");
+    surface.setAttribute("width", bounds.width);
+    surface.setAttribute("height", bounds.height);
+    surface.setAttribute("fill", "#fff");
+    const holes = wire(cuts.map(cutoutPath).join(" "), "re-rack-port-cutouts");
+    holes.setAttribute("fill", "#000");
+    mask.replaceChildren(surface, holes);
+  }
+
+  function computeRoutes(job) {
+    return globalThis.NetBoxRackRouting.routeCables(
+      job.connections, job.obstacles, job.bounds, job.protectedAreas,
+    );
+  }
+
+  function publishRoutes(job, result) {
+    if (job !== geometry) return;
+    geometryRoutes = result;
+    // A resize may have invalidated the layout while the worker was running.
+    if (routes !== null) routes = geometryRoutes;
+    scheduleDraw();
+  }
+
+  function startWorkerJob(job) {
+    activeJob = job;
+    routingWorker.postMessage({
+      connections: job.connections, obstacles: job.obstacles,
+      bounds: job.bounds, protectedAreas: job.protectedAreas,
+      scripts: Array.from(document.querySelectorAll("[data-rack-routing-script]"), script => script.src),
+    });
+  }
+
+  function disableWorker() {
+    routingWorker?.terminate();
+    routingWorker = null;
+    workerUnavailable = true;
+    const newest = queuedJob ?? activeJob;
+    activeJob = null;
+    queuedJob = null;
+    if (newest === geometry) publishRoutes(newest, computeRoutes(newest));
+  }
+
+  function routeInWorker(job) {
+    if (workerUnavailable || !editor.dataset.routingWorkerUrl) return false;
+    try {
+      if (!routingWorker) {
+        routingWorker = new Worker(editor.dataset.routingWorkerUrl);
+        routingWorker.addEventListener("message", (event) => {
+          const completed = activeJob;
+          if (!event.data.paths) {
+            disableWorker();
+            return;
+          }
+          activeJob = null;
+          publishRoutes(completed, new Map(event.data.paths));
+          const next = queuedJob;
+          queuedJob = null;
+          if (next === geometry) startWorkerJob(next);
+        });
+        routingWorker.addEventListener("error", disableWorker);
+      }
+      if (activeJob) queuedJob = job;
+      else startWorkerJob(job);
+      return true;
+    } catch {
+      routingWorker?.terminate();
+      routingWorker = null;
+      workerUnavailable = true;
+      activeJob = null;
+      queuedJob = null;
+      return false;
+    }
+  }
+
+  function routeVisibleCables() {
+    fitPhotos();
+    const origin = board.getBoundingClientRect();
+    const obstacles = Array.from(board.querySelectorAll("[data-route-obstacle]"), card => ({
+      id: card.dataset.routeObstacle, ...relativeRect(card, origin),
+    }));
+    const endpoints = new Map();
+    const protectedAreas = [];
+    const cuts = [];
+    for (const [port, marker] of markers) {
+      if (marker.hidden) continue;
+      const rect = relativeRect(marker, origin);
+      endpoints.set(port, {
+        x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2,
+        device: marker.closest("[data-route-obstacle]").dataset.routeObstacle, port,
+      });
+      cuts.push({kind: "port", rect});
+      protectedAreas.push({port, kind: "port", ...growRect(rect, .75)});
+      const label = marker.querySelector(".re-rack-port-label");
+      if (!label) continue;
+      const labelRect = relativeRect(label, origin);
+      if (labelRect.left >= rect.left && labelRect.right <= rect.right &&
+          labelRect.top >= rect.top && labelRect.bottom <= rect.bottom) continue;
+      cuts.push({kind: "label", rect: labelRect});
+      protectedAreas.push({port, kind: "label", ...growRect(labelRect, 1.5)});
+    }
+    const connections = [];
+    for (const cable of cables.values()) {
+      if (!cableMatchesDevice(cable)) continue;
+      const a = endpoints.get(cable.a);
+      const b = endpoints.get(cable.b);
+      if (a && b) connections.push({id: cable.id, a, b});
+    }
+    const bounds = {width: origin.width, height: origin.height};
+    const key = JSON.stringify([connections, obstacles, bounds, protectedAreas]);
+    if (key !== geometryKey) {
+      geometryKey = key;
+      geometry = {connections, obstacles, bounds, protectedAreas, endpoints};
+      previewRoute = null;
+      updatePortMask(bounds, cuts);
+      // At most one worker job and the most recent replacement are in flight.
+      geometryRoutes = connections.length >= 40 && routeInWorker(geometry)
+        ? new Map()
+        : computeRoutes(geometry);
+    }
+    return geometryRoutes;
+  }
+
+  function clearGrip(points, length) {
+    for (let distance = 12; distance <= Math.min(30, length / 2 - 1); distance += 4) {
+      const point = gripPoint(points, distance);
+      if (!geometry.protectedAreas.some(area => point.x > area.left - 2 && point.x < area.right + 2 &&
+          point.y > area.top - 2 && point.y < area.bottom + 2)) return point;
+    }
+    return null;
+  }
+
+  function drawCablePaths(mode) {
+    const listPreview = hoveredFromList ? hoveredCable : null;
+    hideWireTooltip();
+    shownRoutes.clear();
+    const fragment = document.createDocumentFragment();
+    const handles = document.createDocumentFragment();
+    let selection = [];
+    for (const [id, points] of routes) {
+      const cable = cables.get(id);
+      const active = cable === selectedCable;
+      if (!active && mode !== "all") continue;
+      shownRoutes.set(id, points);
+      const path = pathData(points);
+      const color = cableColor(cable);
+      const stroke = wire(path, "re-rack-wire" + (active ? " re-rack-wire-selected" : ""), color);
+      stroke.dataset.wireVisual = id;
+      stroke.classList.toggle("re-rack-wire-staged-unplug", stagedDeletes.has(id));
+      const hit = wire(path, "re-rack-wire-hit");
+      hit.dataset.wire = id;
+      const strokes = cableStrokes(stroke, color, cable.id);
+      if (active) selection = [wire(path, "re-rack-wire-casing"), ...strokes, hit];
+      else fragment.append(...strokes, hit);
+
+      const length = points.slice(1).reduce((total, point, index) =>
+        total + Math.hypot(point.x - points[index].x, point.y - points[index].y), 0);
+      if (canMove(cable) && length >= 28) {
+        const a = clearGrip(points, length);
+        const b = clearGrip(points.slice().reverse(), length);
+        if (a) handles.append(...cableHandle(cable, cable.a, a.x, a.y, color));
+        if (b) handles.append(...cableHandle(cable, cable.b, b.x, b.y, color));
+      }
+    }
+    const stubCandidates = cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
+    for (const cable of stubCandidates) {
+      if (!cableMatchesDevice(cable) || routes.has(cable.id)) continue;
+      const visible = visibleCablePath(cable);
+      if (visible?.stub) {
+        const active = cable === selectedCable;
+        const color = cableColor(cable);
+        const path = pathData(visible.points);
+        const style = active ? " re-rack-wire-selected re-rack-wire-selected-stub" : " re-rack-wire-focus-stub";
+        const stroke = wire(path, "re-rack-wire" + style, color);
+        stroke.dataset.wireVisual = cable.id;
+        const strokes = cableStrokes(stroke, color, cable.id);
+        if (cableFocusDevice) {
+          const hit = wire(path, "re-rack-wire-hit");
+          hit.dataset.wire = cable.id;
+          shownRoutes.set(cable.id, visible.points);
+          strokes.push(hit);
+        }
+        if (active) selection.push(...strokes);
+        else fragment.append(...strokes);
+      }
+    }
+    fragment.append(...selection);
+    wireLayer.replaceChildren(fragment);
+    handleLayer.replaceChildren(handles);
+    if (listPreview) {
+      hoveredFromList = true;
+      highlightCable(listPreview);
+    } else {
+      drawTracePreview(selectedCable);
+    }
+  }
+
+  function drawWires() {
+    frame = 0;
+    routes ??= routeVisibleCables();
+    const mode = cableFocusDevice ? "all" : lines.value;
+    if (routes !== drawnRoutes || mode !== drawnMode || selectedCable !== drawnSelection) {
+      drawCablePaths(mode);
+      drawnRoutes = routes;
+      drawnMode = mode;
+      drawnSelection = selectedCable;
+    }
+
+    previewLayer.replaceChildren();
+    if (quickMode === "connect" && mode !== "none") {
+      for (const {source, target} of stagedConnections.values()) {
+        if (!cableMatchesDevice({a: source, b: target})) continue;
+        const a = geometry.endpoints.get(source);
+        const b = geometry.endpoints.get(target);
+        if (a && b) {
+          previewLayer.append(wire(pathData([a, b]), "re-rack-wire re-rack-wire-staged-connect", "#25966c"));
+        }
+      }
+    }
+    if (!gesture?.moved) return;
+    const movingCable = cables.get(gesture.port.cableId);
+    const previewOrigin = movingCable
+      ? (movingCable.a === gesture.port.id ? movingCable.b : movingCable.a)
+      : gesture.port.id;
+    const a = geometry.endpoints.get(previewOrigin) ?? geometry.endpoints.get(gesture.port.id);
+    if (!a) return;
+    const origin = board.getBoundingClientRect();
+    const target = geometry.endpoints.get(dropTarget?.id);
+    const b = target ?? {x: gesture.x - origin.left, y: gesture.y - origin.top};
+    if (b.x < 0 || b.x > origin.width || b.y < 0 || b.y > origin.height) return;
+    let points = [a, b];
+    if (target) {
+      if (previewRoute?.from !== a.port || previewRoute?.to !== b.port) {
+        const connection = {id: "preview", a, b};
+        const {obstacles, bounds, protectedAreas} = geometry;
+        const paths = globalThis.NetBoxRackRouting.routeCables([connection], obstacles, bounds, protectedAreas);
+        previewRoute = {from: a.port, to: b.port, points: paths.get(connection.id)};
+      }
+      points = previewRoute.points;
+    }
+    previewLayer.append(wire(pathData(points), "re-rack-wire re-rack-wire-preview", "#36baff"));
+  }
+
+  function invalidateRoutes() {
+    routes = null;
+    scheduleDraw();
+  }
+
+  function scheduleDraw() {
+    if (!frame) frame = requestAnimationFrame(drawWires);
+  }
+
+  function updateMarks() {
+    for (const element of editor.querySelectorAll("[data-port]")) {
+      const id = portIdsByDataset.get(element.dataset.port);
+      element.setAttribute("aria-pressed", String(
+        source?.id === id || selectedCable?.a === id || selectedCable?.b === id ||
+        (quickMode !== "normal" && (quickSource?.id === id || stagedByPort.has(id) ||
+          stagedDeletes.has(ports.get(id)?.cableId)))
+      ));
+      element.classList.toggle("re-rack-drop", dropTarget?.id === id);
+    }
+    cancel.hidden = busy || !source || Boolean(pending);
+    scheduleDraw();
+  }
+
+  function selectCable(cable) {
+    if (busy || pending) return;
+    source = null;
+    selectedCable = cable && cableMatchesDevice(cable) ? cable : null;
+    updateCableDetail();
+    updateMarks();
+    announce(selectedCable ? cableName(selectedCable) + " selected." : idleMessage());
+  }
+
+  function canStart(port) {
+    if (busy || pending || port.blocked || !portRowVisible(port.id) || !portFaceVisible(port.id) ||
+        stagedByPort.has(port.id) || stagedDeletes.has(port.cableId)) return false;
+    return port.cableId === null ? data.canAdd : canMove(cables.get(port.cableId));
+  }
+
+  function chooseSource(port) {
+    if (!canStart(port)) return;
+    source = port;
+    const cable = cables.get(port.cableId);
+    selectedCable = quickMode === "normal" && cable && cableMatchesDevice(cable) ? cable : null;
+    updateCableDetail();
+    updateMarks();
+    const action = port.cableId === null ? "connect" : "move this cable end";
+    announce(describe(port) + " selected. Choose a free port to " + action + ".");
+  }
+
+  function validTarget(port) {
+    return source && port?.id !== source.id && quickAvailable(port);
+  }
+
+  function useTarget(port) {
+    if (!validTarget(port)) {
+      announce("Choose another free port. Existing connections are kept.", true);
+      return;
+    }
+    const action = {source, target: port};
+    if (source.cableId === null) {
+      openCreateDialog(action);
+      return;
+    }
+    hideWireTooltip();
+    pending = action;
+    updateMarks();
+    setError(moveError);
+    get("move-summary").textContent =
+      "Move " + describe(source) + " to " + describe(port) + "? The other end stays connected.";
+    moveDialog.showModal();
+  }
+
+  function clearOperation() {
+    pending = null;
+    source = null;
+    dropTarget = null;
+    updateMarks();
+    announce(selectedCable ? cableName(selectedCable) + " selected." : idleMessage());
+  }
+
+  function connectionBody(action) {
+    return {source: action.source.id, target: action.target.id, cable_id: action.source.cableId};
+  }
+
+  async function save(body, errorBox) {
+    if (busy) return;
+    const url = httpUrl(editor.dataset.cableUrl);
+    const csrf = editor.querySelector("[name=csrfmiddlewaretoken]")?.value;
+    const deleting = body.action === "delete";
+    const updating = body.action === "update";
+    const batching = body.action === "batch";
+    const restoring = body.action === "history";
+    const reportError = (message) => {
+      if (errorBox) setError(errorBox, message);
+      if (batching) announceQuick(message, true);
+      announce(message, true);
+    };
+    if (!url || !csrf) {
+      reportError("The editor could not start this request. Refresh the page and try again.");
+      return;
+    }
+    const dialog = errorBox?.closest("dialog");
+    const controls = dialog?.open
+      ? Array.from(dialog.querySelectorAll("button, input, select"), control => [control, control.disabled])
+      : [];
+    for (const [control] of controls) control.disabled = true;
+    if (errorBox) setError(errorBox);
+    busy = true;
+    updateMarks();
+    updateQuickControls();
+    let progress = "Saving connection…";
+    if (deleting) progress = "Deleting cable…";
+    else if (updating) progress = "Saving cable details…";
+    else if (batching) progress = "Applying queued cable changes…";
+    else if (restoring) progress = "Restoring cable history…";
+    announce(progress);
+    if (batching) announceQuick(progress);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": csrf},
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => ({}));
+      const valid = batching ? Array.isArray(payload.ids) && Boolean(payload.history)
+        : restoring ? Boolean(payload.history) : deleting || Number.isInteger(payload.id);
+      if (!response.ok || !valid) {
+        throw new Error(payload.error || "NetBox could not apply this change. Refresh if the rack changed.");
+      }
+      if (body.cable_id === null) {
+        try {
+          localStorage.setItem(cableDefaultsKey, JSON.stringify({type: body.type, color: body.color}));
+        } catch {
+          // Saving the connection does not depend on browser storage.
+        }
+      }
+      let message = "Connection saved.";
+      if (deleting) message = "Cable deleted.";
+      else if (updating) message = "Cable details saved.";
+      else if (batching) {
+        const count = body.operations.length;
+        message = count === 1 ? "Applied one cable change." : "Applied " + count + " cable changes.";
+        clearQuickQueue();
+      } else if (restoring) {
+        message = "Cable history restored.";
+      }
+      announce(message + " Refreshing the rack…");
+      // Keep queued work through the reload after saving a separate drag operation.
+      const queue = stagedCount() ? {
+        deletes: Array.from(stagedDeletes),
+        connections: Array.from(stagedConnections.values()),
+        preferredSourceDevice,
+      } : null;
+      history.replaceState({...history.state, reRackEditor: {
+        cableId: deleting || batching || restoring ? null : payload.id,
+        left: scroll.scrollLeft,
+        top: scroll.scrollTop,
+        zoom: zoom.value,
+        lines: lines.value,
+        offImage: offImage.checked,
+        search: search.value,
+        message,
+        queue,
+      }}, "");
+      if (queue) window.removeEventListener("beforeunload", warnStagedNavigation);
+      location.reload();
+    } catch (error) {
+      busy = false;
+      for (const [control, disabled] of controls) control.disabled = disabled;
+      updateMarks();
+      updateQuickControls();
+      reportError(error.message || "The cable change could not be saved.");
+      if (moveDialog.open) moveSubmit.focus();
+      if (editDialog.open) editSubmit.focus();
+    }
+  }
+
+  function portAt(element) {
+    const match = element?.closest("[data-port]");
+    return match && editor.contains(match) ? ports.get(portIdsByDataset.get(match.dataset.port)) : null;
+  }
+
+  function portAtPoint(x, y) {
+    const hit = document.elementFromPoint(x, y);
+    if (!hit?.closest("[data-wire]")) return portAt(hit);
+    // Wide SVG hit areas can overlap a visible port near a cable end.
+    for (const element of document.elementsFromPoint(x, y)) {
+      const port = portAt(element);
+      if (port) return port;
+    }
+    return null;
+  }
+
+  function trackDragTarget() {
+    const candidate = portAtPoint(gesture.x, gesture.y);
+    const target = validTarget(candidate) ? candidate : null;
+    if (dropTarget !== target) {
+      dropTarget = target;
+      updateMarks();
+    }
+  }
+
+  function edgeDelta(position, start, end) {
+    const edge = Math.min(40, (end - start) / 4);
+    if (position - start < edge) return -Math.ceil((start + edge - position) / 4);
+    if (end - position < edge) return Math.ceil((position - end + edge) / 4);
+    return 0;
+  }
+
+  function scrollWhileDragging() {
+    scrollFrame = 0;
+    if (!gesture?.moved) return;
+    if (!dropTarget) {
+      const {x, y} = gesture;
+      for (const panel of [scroll, inspectorScroll]) {
+        const {left, right, top, bottom} = panel.getBoundingClientRect();
+        if (x < left || x > right || y < top || y > bottom) continue;
+        const {scrollLeft, scrollTop} = panel;
+        panel.scrollBy(edgeDelta(x, left, right), edgeDelta(y, top, bottom));
+        if (panel.scrollLeft !== scrollLeft || panel.scrollTop !== scrollTop) {
+          trackDragTarget();
+          scheduleDraw();
+        }
+        break;
+      }
+    }
+    scrollFrame = requestAnimationFrame(scrollWhileDragging);
+  }
+
+  function readViewPreferences(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key)) ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeViewPreferences(key, preferences) {
+    try {
+      localStorage.setItem(key, JSON.stringify(preferences));
+    } catch {
+      // The editor can still be used if browser storage is disabled.
+    }
+  }
+
+  function restoreSelect(control, value) {
+    if (Array.from(control.options).some(option => option.value === value)) control.value = value;
+  }
+
+  function saveViewPreferences() {
+    writeViewPreferences(viewPreferencesKey, {
+      connections: viewConnections.checked, directory: viewDirectory.checked, trim: viewTrim.checked,
+      connectionsOpen: connectionsSection.open, directoryOpen: directorySection.open,
+      zoom: zoom.value, lines: lines.value, images: deviceImages.value,
+      interfaceHighlight: interfaceHighlight.value,
+    });
+  }
+
+  function saveRackPreferences() {
+    writeViewPreferences(rackPreferencesKey, {
+      face: rackFace, devices: Array.from(focusedDevices).join(","), hiddenRows: Array.from(hiddenRows).join(","),
+      cableDevice: cableFocusDevice ? String(cableFocusDevice.id) : "",
+      vlan: vlanQuery.value, vlanKind: vlanKind.value, search: search.value, offImage: offImage.checked,
+      deviceGaps: Object.fromEntries(savedGaps),
+    });
+  }
+
+  function applyViewOptions() {
+    hideWireTooltip();
+    connectionsSection.hidden = !viewConnections.checked;
+    directorySection.hidden = !viewDirectory.checked;
+    workspace.toggleAttribute("data-view-no-sidebar", !viewConnections.checked && !viewDirectory.checked);
+    invalidateRoutes();
+  }
+
+  function setDeviceImages() {
+    board.dataset.imageMode = deviceImages.value;
+    saveViewPreferences();
+  }
+
+  function setZoom() {
+    board.toggleAttribute("data-zoomed", Number(zoom.value) > 1);
+    board.style.setProperty("--re-rack-zoom", zoom.value);
+    board.style.setProperty("--re-rack-unit", (40 * Number(zoom.value)) + "px");
+    applyElevationSpacing();
+    invalidateRoutes();
+    saveViewPreferences();
+  }
+
+  function renderDeviceOptions() {
+    const fragment = document.createDocumentFragment();
+    for (const {id, name} of data.devices) {
+      const label = node("label", "form-check re-rack-device-option");
+      const input = node("input", "form-check-input");
+      input.type = "checkbox";
+      input.value = id;
+      input.checked = focusedDevices.has(id);
+      label.append(input, node("span", "form-check-label", name));
+      fragment.append(label);
+    }
+    if (!data.devices.length) fragment.append(node("span", "text-muted small", "No visible devices."));
+    deviceOptions.append(fragment);
+    updateDeviceFilter();
+  }
+
+  function updateDeviceFilter() {
+    const count = focusedDevices.size;
+    const total = data.devices.length;
+    deviceSummary.textContent = count ? "Devices: " + count + " of " + total : "Devices: All";
+    deviceReset.hidden = !count;
+    deviceStatus.textContent = count
+      ? "Showing " + count + " of " + total + " devices."
+      : (total ? "Showing all " + total + " devices." : "No visible devices.");
+  }
+
+  function renderPortRows() {
+    const devices = new Map(data.devices.map(device => [device.id, device.name]));
+    const groups = new Map();
+    for (const row of portRows) {
+      if (!deviceInFocus(row.deviceId) || !rackFaceVisible(row.rackFace)) continue;
+      const key = row.deviceId + ":" + row.rackFace;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (const rows of groups.values()) {
+      const {deviceId, rackFace} = rows[0];
+      const title = devices.get(deviceId) + " · " + (rackFace === "front" ? "Front" : "Rear");
+      const group = node("div", "re-rack-row-group");
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", title);
+      group.append(node("div", "re-rack-row-group-label", title));
+      for (const row of rows) {
+        const option = node("div", "re-rack-row-option");
+        const toggle = node("label", "form-check re-rack-row-option-toggle");
+        const input = node("input", "form-check-input");
+        input.type = "checkbox";
+        input.value = row.id;
+        input.dataset.portRowChoice = "";
+        const name = "Row " + row.number;
+        const count = row.ports.length + (row.ports.length === 1 ? " port" : " ports");
+        toggle.append(input, node("span", "form-check-label", name + " · " + count));
+        option.append(toggle);
+        if (rows.length > 1) {
+          const only = button("btn btn-outline-secondary btn-sm re-rack-row-only", "Only");
+          only.dataset.onlyPortRow = row.id;
+          only.setAttribute("aria-label", "Show only " + name + " on " + title);
+          option.append(only);
+        }
+        group.append(option);
+      }
+      fragment.append(group);
+    }
+    rowOptions.replaceChildren(fragment);
+    updatePortRows();
+  }
+
+  function updatePortRows() {
+    const choices = rowOptions.querySelectorAll("input[data-port-row-choice]");
+    let visible = 0;
+    for (const input of choices) {
+      input.checked = !hiddenRows.has(input.value);
+      if (input.checked) visible++;
+    }
+    rowFilter.hidden = !choices.length;
+    if (rowFilter.hidden) rowFilter.open = false;
+    rowReset.hidden = !hiddenRows.size;
+    rowSummary.textContent = visible === choices.length ? "Port rows" : "Port rows: " + visible + " of " + choices.length;
+    rowStatus.textContent = choices.length
+      ? "Showing " + visible + " of " + choices.length + " port rows."
+      : "No placed port rows in the current devices.";
+  }
+
+  function clearViewInteraction() {
+    const oldGesture = gesture;
+    gesture = null;
+    if (oldGesture) {
+      suppressClick = oldGesture.moved;
+      if (editor.hasPointerCapture(oldGesture.id)) editor.releasePointerCapture(oldGesture.id);
+    }
+    selectedCable = null;
+    clearOperation();
+    hideWireTooltip();
+    drawTracePreview(null);
+    wireLayer.replaceChildren();
+    handleLayer.replaceChildren();
+    previewLayer.replaceChildren();
+    shownRoutes.clear();
+    drawnRoutes = null;
+  }
+
+  function persistViewFilters() {
+    const url = new URL(location.href);
+    if (focusedDevices.size) url.searchParams.set("devices", Array.from(focusedDevices).join(","));
+    else url.searchParams.delete("devices");
+    if (cableFocusDevice) url.searchParams.set("cableDevice", cableFocusDevice.id);
+    else url.searchParams.delete("cableDevice");
+    if (hiddenRows.size) url.searchParams.set("hiddenRows", Array.from(hiddenRows).sort().join(","));
+    else url.searchParams.delete("hiddenRows");
+    if (rackFace === "front") url.searchParams.delete("face");
+    else url.searchParams.set("face", rackFace);
+    const vid = vlanId();
+    if (vid === null) url.searchParams.delete("vlan");
+    else url.searchParams.set("vlan", vid);
+    if (vlanKind.value === "any") url.searchParams.delete("vlanKind");
+    else url.searchParams.set("vlanKind", vlanKind.value);
+    history.replaceState(history.state, "", url);
+    saveRackPreferences();
+  }
+
+  function refreshVisibleConnections() {
+    refreshVlanMatches();
+    filterDirectory();
+    drawCableList();
+    updateCableDetail();
+    if (!quickPortVisible(quickSource)) quickSource = null;
+    refreshQuickView();
+    invalidateRoutes();
+    persistViewFilters();
+  }
+
+  function updateRackFace() {
+    board.dataset.rackFace = rackFace;
+    gutter.hidden = rackFace !== "both";
+    for (const panel of facePanels) panel.hidden = !rackFaceVisible(panel.dataset.rackFacePanel);
+    for (const choice of faceChoices) {
+      const active = choice.dataset.rackFaceChoice === rackFace;
+      choice.setAttribute("aria-pressed", String(active));
+      choice.classList.toggle("active", active);
+    }
+  }
+
+  function applyRackFace(face) {
+    if (busy || face === rackFace || !["front", "rear", "both"].includes(face)) return;
+    const top = scroll.scrollTop;
+    rackFace = face;
+    clearViewInteraction();
+    updateRackFace();
+    drawElevations();
+    refreshVisibleConnections();
+    renderPortRows();
+    scroll.scrollTo(0, top);
+  }
+
+  function applyDeviceFocus() {
+    clearViewInteraction();
+    drawElevations();
+    refreshVisibleConnections();
+    updateDeviceFilter();
+    renderPortRows();
+    scroll.scrollTo(0, 0);
+    inspectorScroll.scrollTop = 0;
+  }
+
+  function applyPortRows() {
+    clearViewInteraction();
+    for (const [port, marker] of markers) marker.hidden = !portRowVisible(port);
+    refreshVisibleConnections();
+    updatePortRows();
+  }
+
+  function updateCableFocusControls() {
+    editor.toggleAttribute("data-device-cable-focus", Boolean(cableFocusDevice));
+    cableFocusClear.hidden = !cableFocusDevice;
+    cableFocusClear.textContent = cableFocusDevice ? "Cables: " + cableFocusDevice.name + " ×" : "";
+    lines.disabled = Boolean(cableFocusDevice);
+    lines.title = cableFocusDevice ? "Clear device cable focus to change cable visibility" : "";
+  }
+
+  function setCableFocus(device) {
+    if (busy || pending || device === cableFocusDevice) return;
+    const previousDevice = cableFocusDevice;
+    const restoreFocus = document.activeElement === cableFocusClear;
+    cableFocusDevice = device;
+    clearViewInteraction();
+    updateCableFocusControls();
+    for (const control of board.querySelectorAll("[data-cable-focus-device]")) {
+      control.setAttribute("aria-pressed", String(control.dataset.cableFocusDevice === String(device?.id)));
+    }
+    for (const element of editor.querySelectorAll("[data-port]")) {
+      element.toggleAttribute("data-unrelated-port", dimPortForCableFocus(portAt(element)));
+    }
+    refreshVisibleConnections();
+    if (restoreFocus && previousDevice) {
+      const trigger = board.querySelector('[data-cable-focus-device="' + previousDevice.id + '"]');
+      (trigger ?? deviceSummary).focus({preventScroll: true});
+    }
+  }
+
+  for (const device of data.devices) {
+    for (const port of device.ports) {
+      ports.set(port.id, {...port, device});
+      portIdsByDataset.set(String(port.id), port.id);
+    }
+  }
+  renderDeviceOptions();
+  renderPortRows();
+  restoreListFields();
+  viewConnections.checked = viewPreferences.connections !== false;
+  viewDirectory.checked = viewPreferences.directory !== false;
+  viewTrim.checked = viewPreferences.trim === true;
+  connectionsSection.open = viewPreferences.connectionsOpen !== false;
+  directorySection.open = viewPreferences.directoryOpen !== false;
+  restoreSelect(zoom, viewPreferences.zoom);
+  restoreSelect(lines, viewPreferences.lines);
+  updateCableFocusControls();
+  restoreSelect(interfaceHighlight, viewPreferences.interfaceHighlight);
+  editor.dataset.interfaceHighlightMode = interfaceHighlight.value;
+  restoreSelect(deviceImages, viewPreferences.images ?? history.state?.reRackDeviceImages);
+  board.dataset.imageMode = deviceImages.value;
+  applyViewOptions();
+  vlanQuery.value = viewFilter("vlan");
+  restoreSelect(vlanKind, viewFilter("vlanKind"));
+  search.value = typeof rackPreferences.search === "string" ? rackPreferences.search : "";
+  offImage.checked = rackPreferences.offImage === true;
+  updateRackFace();
+  drawElevations();
+  refreshVlanMatches();
+  drawDirectory();
+  drawCableList();
+  workspace.hidden = false;
+  announce(idleMessage());
+  refreshQuickView();
+  cableFocusClear.addEventListener("click", () => setCableFocus(null));
+
+  for (const choice of faceChoices) {
+    choice.addEventListener("click", () => applyRackFace(choice.dataset.rackFaceChoice));
+  }
+  for (const control of quickButtons) {
+    control.addEventListener("click", () => changeQuickMode(control.dataset.quickMode));
+  }
+  quickApply.addEventListener("click", applyQuickQueue);
+  quickClear.addEventListener("click", () => {
+    if (!busy) clearQuickQueue();
+  });
+  historyUndo.addEventListener("click", () => navigateHistory(checkpoints[checkpointIndex - 1]?.sequence));
+  historyRedo.addEventListener("click", () => navigateHistory(checkpoints[checkpointIndex + 1]?.sequence));
+  historyOpen.addEventListener("click", showHistory);
+  get("history-close").addEventListener("click", () => historyDialog.close());
+
+  deviceOptions.addEventListener("change", (event) => {
+    const input = event.target;
+    if (!input.matches('input[type="checkbox"]')) return;
+    const id = Number(input.value);
+    if (busy) {
+      input.checked = focusedDevices.has(id);
+      return;
+    }
+    if (input.checked) focusedDevices.add(id);
+    else focusedDevices.delete(id);
+    applyDeviceFocus();
+  });
+  deviceReset.addEventListener("click", () => {
+    if (busy) return;
+    focusedDevices.clear();
+    for (const input of deviceOptions.querySelectorAll('input[type="checkbox"]')) input.checked = false;
+    applyDeviceFocus();
+    deviceFilter.open = false;
+    deviceSummary.focus();
+  });
+  rowOptions.addEventListener("change", (event) => {
+    const input = event.target;
+    if (!input.matches("input[data-port-row-choice]")) return;
+    if (busy) {
+      input.checked = !hiddenRows.has(input.value);
+      return;
+    }
+    if (input.checked) hiddenRows.delete(input.value);
+    else hiddenRows.add(input.value);
+    applyPortRows();
+  });
+  rowOptions.addEventListener("click", (event) => {
+    const only = event.target.closest("[data-only-port-row]");
+    if (!only || busy) return;
+    const row = rowById.get(only.dataset.onlyPortRow);
+    for (const other of portRows) {
+      if (other.deviceId !== row.deviceId || other.rackFace !== row.rackFace) continue;
+      if (other.id === row.id) hiddenRows.delete(other.id);
+      else hiddenRows.add(other.id);
+    }
+    applyPortRows();
+  });
+  rowReset.addEventListener("click", () => {
+    if (busy) return;
+    hiddenRows.clear();
+    applyPortRows();
+    rowFilter.open = false;
+    if (rowFilter.hidden) deviceSummary.focus();
+    else rowSummary.focus();
+  });
+  for (const [filter, summary] of [[deviceFilter, deviceSummary], [rowFilter, rowSummary], [viewOptions, viewSummary]]) {
+    document.addEventListener("click", (event) => {
+      if (filter.open && !filter.contains(event.target)) filter.open = false;
+    });
+    filter.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !filter.open) return;
+      event.preventDefault();
+      event.stopPropagation();
+      filter.open = false;
+      summary.focus();
+    });
+  }
+  for (const [key, control] of listFields) {
+    control.addEventListener("change", () => {
+      const [kind, field] = key.split(":");
+      for (const element of editor.querySelectorAll("[data-" + kind + '-value="' + field + '"]')) {
+        element.hidden = !control.checked;
+      }
+      try {
+        localStorage.setItem(listFieldsKey, JSON.stringify(Object.fromEntries(
+          Array.from(listFields, ([fieldKey, input]) => [fieldKey, input.checked]),
+        )));
+      } catch {
+        // The visible columns still change if browser storage is unavailable.
+      }
+    });
+  }
+  vlanQuery.addEventListener("input", applyVlanFilter);
+  vlanKind.addEventListener("change", applyVlanFilter);
+  vlanClear.addEventListener("click", () => {
+    vlanQuery.value = "";
+    vlanKind.value = "any";
+    applyVlanFilter();
+    vlanQuery.focus();
+  });
+  const changeDirectoryView = () => {
+    filterDirectory();
+    saveRackPreferences();
+  };
+  search.addEventListener("input", changeDirectoryView);
+  offImage.addEventListener("change", changeDirectoryView);
+  lines.addEventListener("change", () => {
+    scheduleDraw();
+    saveViewPreferences();
+  });
+  interfaceHighlight.addEventListener("change", () => {
+    editor.dataset.interfaceHighlightMode = interfaceHighlight.value;
+    saveViewPreferences();
+  });
+  for (const control of [viewConnections, viewDirectory, viewTrim]) {
+    control.addEventListener("change", () => {
+      applyViewOptions();
+      saveViewPreferences();
+    });
+  }
+  for (const section of [connectionsSection, directorySection]) {
+    section.addEventListener("toggle", saveViewPreferences);
+  }
+  deviceImages.addEventListener("change", setDeviceImages);
+  zoom.addEventListener("change", setZoom);
+  cancel.addEventListener("click", clearOperation);
+  new ResizeObserver(invalidateRoutes).observe(scroll, {box: "border-box"});
+
+  for (const form of [createForm, editForm]) {
+    for (const type of data.cableTypes) form.elements.type.add(new Option(type.label, type.value));
+    form.addEventListener("click", (event) => {
+      const swatch = event.target.closest("[data-color-value]");
+      if (swatch) form.elements.color.value = swatch.dataset.colorValue;
+    });
+  }
+  for (const status of data.cableStatuses ?? []) editForm.elements.status.add(new Option(status.label, status.value));
+  createForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!createAction || busy) return;
+    save({
+      ...connectionBody(createAction),
+      label: createForm.elements.label.value.trim(),
+      color: createForm.elements.color.value.replace(/^#/, ""),
+      type: createForm.elements.type.value,
+    }, createError);
+  });
+  get("create-cancel").addEventListener("click", () => createDialog.close());
+  createDialog.addEventListener("close", () => {
+    createAction = null;
+    clearOperation();
+  });
+
+  editForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!editingCable || busy) return;
+    const changes = Object.entries(cableEditValues()).filter(([name, value]) => value !== editInitialValues[name]);
+    if (!changes.length) editDialog.close();
+    else save({action: "update", cable_id: editingCable.id, ...Object.fromEntries(changes)}, editError);
+  });
+  get("edit-close").addEventListener("click", () => editDialog.close());
+  editDialog.addEventListener("close", () => {
+    editingCable = null;
+    editInitialValues = null;
+  });
+
+  moveForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (pending) save(connectionBody(pending), moveError);
+  });
+  get("move-cancel").addEventListener("click", () => moveDialog.close());
+  moveDialog.addEventListener("close", clearOperation);
+
+  get("modal-close").addEventListener("click", () => detailsDialog.close());
+  deleteButton.addEventListener("click", () => showDeleteConfirm(true));
+  deleteCancel.addEventListener("click", () => {
+    setError(detailsError);
+    showDeleteConfirm(false);
+    deleteButton.focus();
+  });
+  deleteYes.addEventListener("click", () => {
+    if (selectedCable?.deletable) save({action: "delete", cable_id: selectedCable.id}, detailsError);
+  });
+  for (const dialog of [createDialog, editDialog, moveDialog, detailsDialog, historyDialog]) {
+    dialog.addEventListener("cancel", (event) => {
+      if (busy) event.preventDefault();
+    });
+  }
+
+  window.addEventListener("resize", hideWireTooltip);
+  window.addEventListener("scroll", hideWireTooltip, {passive: true});
+  scroll.addEventListener("scroll", hideWireTooltip);
+  editor.addEventListener("pointerleave", hideWireTooltip);
+  inspectorScroll.addEventListener("scroll", hideWireTooltip);
+
+  editor.addEventListener("contextmenu", openContextMenu);
+  contextMenu.addEventListener("contextmenu", (event) => event.preventDefault());
+  document.addEventListener("pointerdown", (event) => {
+    if (!contextMenu.contains(event.target)) closeContextMenu();
+  });
+  for (const panel of [window, scroll, inspectorScroll]) {
+    panel.addEventListener("scroll", () => closeContextMenu(true), {passive: true});
+  }
+  window.addEventListener("resize", () => closeContextMenu(true));
+  contextMenu.addEventListener("keydown", (event) => {
+    if (event.key === "Tab" || event.key === "Escape") {
+      if (event.key === "Escape") event.preventDefault();
+      event.stopPropagation();
+      closeContextMenu(true);
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from(contextMenu.querySelectorAll("[role=menuitem]"));
+    const index = items.indexOf(document.activeElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+      : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
+  });
+
+  editor.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    suppressClick = false;
+    hideWireTooltip();
+    const port = portAt(event.target) ?? wirePortAt(event);
+    if (!port || !canStart(port)) return;
+    gesture = {port, id: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false};
+  });
+
+  window.addEventListener("pointermove", (event) => {
+    if (!gesture || event.pointerId !== gesture.id) {
+      showWireTooltip(event);
+      return;
+    }
+    if (!gesture.moved) {
+      if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) < 5) return;
+      for (const filter of [viewOptions, deviceFilter, rowFilter]) filter.open = false;
+      gesture.moved = true;
+      // The rack stays mounted while wire graphics are replaced during the drag.
+      editor.setPointerCapture(event.pointerId);
+      chooseSource(gesture.port);
+    }
+    gesture.x = event.clientX;
+    gesture.y = event.clientY;
+    trackDragTarget();
+    scheduleDraw();
+    if (!scrollFrame) scrollFrame = requestAnimationFrame(scrollWhileDragging);
+  });
+
+  window.addEventListener("pointerup", (event) => {
+    if (!gesture || event.pointerId !== gesture.id) return;
+    const moved = gesture.moved;
+    // Resolve the hit while the current drop marker is still enlarged.
+    const target = moved ? portAtPoint(event.clientX, event.clientY) : null;
+    gesture = null;
+    dropTarget = null;
+    if (!moved) return;
+    suppressClick = true;
+    updateMarks();
+    if (target && (quickMode === "normal" || validTarget(target))) {
+      useTarget(target);
+    } else if (quickMode === "normal") {
+      announce("No port selected. Choose a free port or cancel.");
+    } else {
+      clearOperation();
+      announce("Drop on a free port that is not queued.", true);
+    }
+  });
+
+  function cancelGesture(event) {
+    if (!gesture || event.pointerId !== gesture.id) return;
+    const moved = gesture.moved;
+    gesture = null;
+    if (moved) clearOperation();
+  }
+
+  window.addEventListener("pointercancel", cancelGesture);
+  editor.addEventListener("lostpointercapture", (event) => {
+    if (event.target === editor) cancelGesture(event);
+  });
+
+  editor.addEventListener("click", (event) => {
+    if (busy || pending || (suppressClick && event.detail > 0)) return;
+    const port = portAt(event.target);
+    if (quickMode !== "normal") {
+      if (quickPortVisible(port)) {
+        if (quickMode === "unplug") queueUnplug(port);
+        else queueConnection(port);
+      }
+      return;
+    }
+    const clickedCable = cableAt(event);
+    if (clickedCable) {
+      openCableDetails(clickedCable);
+      return;
+    }
+    if (!port) return;
+    if (source?.id === port.id) clearOperation();
+    else if (source) useTarget(port);
+    else if (port.cableId !== null) {
+      const cable = cables.get(port.cableId);
+      if (cable) openCableDetails(cable);
+      else announce("This port already has a connection outside this view.");
+    } else if (canStart(port)) chooseSource(port);
+    else announce("This port is unavailable for editing.");
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (!gesture?.moved || event.key.toLowerCase() !== "i" || event.isComposing ||
+        event.ctrlKey || event.altKey || event.metaKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    deviceImages.selectedIndex = (deviceImages.selectedIndex + 1) % deviceImages.options.length;
+    setDeviceImages();
+    announce("Device images: " + deviceImages.selectedOptions[0].textContent + ".");
+  }, {capture: true});
+
+  editor.addEventListener("keydown", (event) => {
+    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+      openContextMenu(event, true);
+      return;
+    }
+    if (event.key !== "Escape" || busy ||
+        createDialog.open || editDialog.open || moveDialog.open || detailsDialog.open || historyDialog.open) return;
+    if (quickSource && !gesture?.moved && !source && !pending) {
+      event.preventDefault();
+      quickSource = null;
+      refreshQuickView();
+      return;
+    }
+    if (!source && !pending) return;
+    event.preventDefault();
+    if (gesture && editor.hasPointerCapture(gesture.id)) editor.releasePointerCapture(gesture.id);
+    gesture = null;
+    const previousSource = source;
+    clearOperation();
+    const control = visibleMarker(previousSource?.id) ??
+      directory.querySelector('.re-rack-directory-device:not([hidden]) .re-rack-directory-entry:not([hidden]) [data-port="' +
+        previousSource?.id + '"]');
+    control?.focus({preventScroll: true});
+  });
+
+  const restore = history.state?.reRackEditor;
+  if (restore) {
+    history.replaceState({...history.state, reRackEditor: null}, "");
+    if (restore.queue && quickMode !== "normal") {
+      for (const id of restore.queue.deletes) stagedDeletes.add(id);
+      for (const operation of restore.queue.connections) {
+        stagedConnections.set(operation.source, operation);
+        stagedByPort.set(operation.source, operation);
+        stagedByPort.set(operation.target, operation);
+      }
+      preferredSourceDevice = restore.queue.preferredSourceDevice;
+      refreshQuickView();
+    }
+    restoreSelect(zoom, restore.zoom);
+    restoreSelect(lines, restore.lines);
+    offImage.checked = restore.offImage ?? offImage.checked;
+    search.value = restore.search ?? "";
+    filterDirectory();
+    setZoom();
+    requestAnimationFrame(() => scroll.scrollTo(restore.left, restore.top));
+    const restoredCable = cables.get(restore.cableId);
+    if (quickMode === "normal" && restoredCable && cableHasPortInView(restoredCable)) selectCable(restoredCable);
+    if (restore.message) announce(restore.message);
+  } else {
+    setZoom();
+  }
+  saveRackPreferences();
+})();

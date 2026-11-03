@@ -1,0 +1,40 @@
+# Isolated localhost instance for plugin development; contains sample credentials.
+name: netbox-rack-editor-dev
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: local-rack-editor-dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netbox"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+  netbox:
+    image: ghcr.io/netbox-community/netbox:v4.5.10
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DB_HOST: postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: local-rack-editor-dev
+      REDIS_HOST: redis
+      REDIS_CACHE_HOST: redis
+      REDIS_CACHE_DATABASE: "1"
+      SECRET_KEY: dev-only-netbox-rack-editor-9Z7v-local-only-secret-key
+      ALLOWED_HOSTS: localhost 127.0.0.1 testserver
+      SKIP_SUPERUSER: "true"
+      PYTHONPATH: /plugin
+    ports:
+      - "127.0.0.1:8096:8080"
+    volumes:
+      - ../:/plugin:ro
+      - ./plugins.py:/etc/netbox/config/plugins.py:ro
