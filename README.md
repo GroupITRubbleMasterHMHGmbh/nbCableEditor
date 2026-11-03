@@ -7,6 +7,10 @@ Version **0.10.1** ist für **NetBox 4.5.10 und neuere 4.5-Versionen** ausgelegt
 - [Installation und Updates für bestehende NetBox-Instanzen](docs/installation.md)
 - [Lokale Docker-Demo](#lokale-docker-demo)
 
+![Rack-Ansicht mit Switches, Patchpanel und farbigen Kabeln](docs/screenshots/rack-cable-focus.png)
+
+Der Kabelfokus zeigt die direkten Verbindungen des Patchpanels. Die übrigen belegten Ports erscheinen grau.
+
 ## Portpositionen am Gerätetyp festlegen
 
 1. Am **Device Type** Front- und Rückbild hinterlegen. Für einen Switch **Interface Templates** anlegen. Bei Patchpanels die Buchsen als **Front Port Templates** und **Rear Port Templates** mit nativen NetBox-Portzuordnungen modellieren.
@@ -14,6 +18,8 @@ Version **0.10.1** ist für **NetBox 4.5.10 und neuere 4.5-Versionen** ausgelegt
 3. **First port** und **Last port** auswählen. Für 48 Ports in zwei Reihen unter **Columns** den Wert `24` setzen. Mit **Numbering** festlegen, ob die Reihen oder die Spalten zuerst durchnummeriert werden.
 4. Mit der Maus ein Rechteck über dem Portfeld aufziehen. Der Editor verteilt die Marker gleichmäßig. **Place centered** platziert die Auswahl ohne Ziehen. Einzelne Marker lassen sich anschließend verschieben oder entfernen.
 5. **Save layout** wählen. Das Layout gilt für alle Geräte dieses Typs, die entsprechende Ports haben. Ports ohne Position sind im **Interface directory** verfügbar.
+
+![Portlayout eines Switches mit 48 nummerierten Ports in zwei Reihen](docs/screenshots/port-layout.png)
 
 ## Kabel im Rack bearbeiten
 
@@ -34,6 +40,8 @@ Das **Interface directory** unterscheidet bei Interfaces den Aktivierungszustand
 ### Patchpanels, Wanddosen und Reichweite
 
 Kabel, Geräte, Ports und Bilder sind native NetBox-Objekte. Das Plugin speichert die Portpositionen und den persönlichen Kabelverlauf pro Rack. Es bearbeitet einfache 1:1-Kabel zwischen unterstützten Interfaces, Front Ports und Rear Ports im selben Rack. Bei berechtigten Leserechten kann die Vorschau einer Strecke über native Portzuordnungen bis zur Wanddose oder zum Endgerät außerhalb des Racks führen. Für rackübergreifende Kabel und komplexe Kabelprofile erfolgt die Bearbeitung in der normalen NetBox-Oberfläche.
+
+![Kabeldetails mit Verlauf von Switch A über Patchpanel und Wanddose bis zum Access Point](docs/screenshots/cable-trace.png)
 
 Welche Geräte, Ports, Kabel und VLANs sichtbar sind, hängt von den NetBox-Objektrechten ab. Die [Übersicht zu Berechtigungen](docs/installation.md#berechtigungen) listet die Rechte für Layout und Verkabelung.
 
