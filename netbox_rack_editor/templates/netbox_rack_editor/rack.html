@@ -14,6 +14,11 @@
   <script src="{% static 'netbox_rack_editor/rack-routing.js' %}?v={{ editor_version }}" data-rack-routing-script defer></script>
   <script src="{% static 'netbox_rack_editor/rack-rows.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-tooltip.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'netbox_rack_editor/rack-cable-path.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'netbox_rack_editor/rack-export.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'netbox_rack_editor/rack-print-labels.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'netbox_rack_editor/rack-export-list.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'netbox_rack_editor/rack-export-print.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack.js' %}?v={{ editor_version }}" defer></script>
 {% endblock %}
 
@@ -55,6 +60,8 @@
             <button type="button" class="btn btn-sm btn-outline-secondary" data-history-redo disabled>Redo</button>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-history-open>History</button>
           </div>
+          <button type="button" class="btn btn-sm btn-outline-primary" data-export-open
+                  aria-haspopup="dialog">Export plan</button>
         </div>
         <p class="text-muted small mb-0" role="status" data-quick-status hidden></p>
       </section>
@@ -101,6 +108,15 @@
                     <option value="selected">Selected only</option>
                     <option value="none">Hidden</option>
                   </select>
+                  <label for="re-rack-routing-strategy">Routing strategy</label>
+                  <select class="form-select no-ts form-select-sm" id="re-rack-routing-strategy"
+                          data-routing-strategy aria-describedby="re-rack-routing-help">
+                    <option value="balanced" selected>Balanced</option>
+                    <option value="pcb">PCB-style</option>
+                  </select>
+                  <p class="re-rack-view-help text-secondary" id="re-rack-routing-help">
+                    PCB-style uses wider lanes and rounded turns around devices.
+                  </p>
                   <label for="re-rack-device-images">Device images</label>
                   <select class="form-select no-ts form-select-sm" id="re-rack-device-images"
                           data-device-images aria-keyshortcuts="I">
@@ -276,6 +292,67 @@
     </svg>
     <div class="re-rack-tooltip" role="tooltip" data-cable-tooltip hidden></div>
     <div class="re-rack-context-menu" role="menu" aria-label="Rack actions" tabindex="-1" data-context-menu hidden></div>
+
+    <dialog class="re-rack-dialog re-rack-export-dialog" data-export-dialog aria-labelledby="re-rack-export-title">
+      <form class="re-rack-dialog-body" method="dialog" data-export-form>
+        <h2 class="re-rack-dialog-title" id="re-rack-export-title">Export rack plan</h2>
+        <p class="re-rack-dialog-summary">Uses the current rack sides, devices and cable display.</p>
+        <label class="form-label mb-0" for="re-rack-export-format">Output</label>
+        <select class="form-select no-ts" id="re-rack-export-format" data-export-format autofocus>
+          <option value="pdf">Print / Save as PDF</option>
+          <option value="png">PNG image</option>
+        </select>
+        <div class="re-rack-export-options" data-export-print-options>
+          <div>
+            <label class="form-label" for="re-rack-export-paper">Paper size</label>
+            <select class="form-select no-ts" id="re-rack-export-paper" data-export-paper>
+              <option value="a5">A5</option>
+              <option value="a4" selected>A4</option>
+              <option value="a3">A3</option>
+              <option value="letter">Letter</option>
+              <option value="legal">Legal</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label" for="re-rack-export-orientation">Orientation</label>
+            <select class="form-select no-ts" id="re-rack-export-orientation" data-export-orientation>
+              <option value="portrait">Portrait</option>
+              <option value="landscape" selected>Landscape</option>
+            </select>
+          </div>
+          <label class="form-check re-rack-export-wide">
+            <input type="checkbox" class="form-check-input" data-export-cables checked
+                   aria-describedby="re-rack-export-count">
+            <span class="form-check-label">Include cable list</span>
+            <small class="d-block text-muted" id="re-rack-export-count" data-export-count></small>
+          </label>
+          <p class="re-rack-dialog-summary re-rack-export-wide">The print layout separates cable runs. With the list included, cable numbers link the plan to its rows.</p>
+          <p class="re-rack-dialog-summary re-rack-export-wide">Choose your printer or <strong>Save as PDF</strong> in the print dialog.</p>
+        </div>
+        <div class="re-rack-export-options" data-export-image-options hidden>
+          <div>
+            <label class="form-label" for="re-rack-export-resolution">Longest side</label>
+            <select class="form-select no-ts" id="re-rack-export-resolution" data-export-resolution>
+              <option value="1600">1600 px</option>
+              <option value="2400" selected>2400 px</option>
+              <option value="3600">3600 px</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div data-export-custom-field hidden>
+            <label class="form-label" for="re-rack-export-custom">Pixels</label>
+            <input class="form-control" id="re-rack-export-custom" data-export-custom type="number"
+                   min="320" max="6000" step="1" value="2400" required disabled>
+          </div>
+          <output class="re-rack-dialog-summary re-rack-export-wide" data-export-dimensions></output>
+        </div>
+        <p class="re-rack-dialog-error" role="alert" data-export-error hidden></p>
+        <div class="re-rack-dialog-actions">
+          <button type="button" class="btn btn-outline-secondary" data-export-cancel>Cancel</button>
+          <button type="submit" class="btn btn-primary" data-export-submit>Print / Save as PDF</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog class="re-rack-dialog" data-cable-create
             aria-labelledby="re-rack-create-title" aria-describedby="re-rack-create-summary">

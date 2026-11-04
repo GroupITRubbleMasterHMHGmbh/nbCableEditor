@@ -6,6 +6,9 @@
   const CARD_CLEARANCE = 5;
   const PROTECTED_CELL_SIZE = 40;
   const WIRE_CELL_SIZE = 80;
+  const PCB_SPACING = 5;
+  const PCB_MIN_SPACING = 3.2;
+  const PCB_CLEARANCE = 2;
 
   function orderKey(a, b) {
     const first = String(a);
@@ -341,11 +344,11 @@
     // A clear path wins unconditionally. Otherwise a blocked marker costs more than a blocked label.
     const aObstructions = a.ports * 2 + a.labels;
     const bObstructions = b.ports * 2 + b.labels;
-    return aObstructions - bObstructions || a.ports - b.ports;
+    return (a.cards ?? 0) - (b.cards ?? 0) || aObstructions - bObstructions || a.ports - b.ports;
   }
 
   function isClear(candidate) {
-    return !candidate.obstruction.ports && !candidate.obstruction.labels;
+    return !candidate.obstruction.cards && !candidate.obstruction.ports && !candidate.obstruction.labels;
   }
 
   function terminalLeads(connection, start, end, protection, bounds) {
@@ -429,26 +432,210 @@
     return box;
   }
 
-  function candidates(connection, obstacles, bounds, protection, laneSeedLimit) {
+  function pcbAxis(axis) {
+    return axis === "x" ? ["y", "left", "right", "top", "bottom"] : ["x", "top", "bottom", "left", "right"];
+  }
+
+  function pcbWindows(axis, from, to, obstacles, bounds) {
+    const [, low, high, start, end] = pcbAxis(axis);
+    const limit = (axis === "x" ? bounds.width : bounds.height) - PCB_CLEARANCE;
+    const first = Math.min(from, to);
+    const last = Math.max(from, to);
+    const blocked = obstacles.filter(box => box[start] <= last && box[end] >= first)
+      .sort((a, b) => a[low] - b[low] || a[high] - b[high]);
+    const free = [];
+    let left = PCB_CLEARANCE;
+    for (const box of blocked) {
+      const right = Math.min(limit, box[low] - PCB_CLEARANCE);
+      if (right >= left) free.push([left, right]);
+      left = Math.max(left, box[high] + PCB_CLEARANCE);
+      if (left > limit) return free;
+    }
+    if (limit >= left) free.push([left, limit]);
+    return free;
+  }
+
+  function pcbTracks(windows, preferred, lane, laneCount, spacing) {
+    const dist = ([left, right]) => Math.max(left - preferred, preferred - right, 0);
+    const nearby = windows.sort((a, b) => dist(a) - dist(b) || a[0] - b[0]).slice(0, 4);
+    const tracks = new Set();
+    const demand = Math.min(24, Math.ceil(laneCount / 2));
+    const minimumPitch = PCB_MIN_SPACING * spacing / PCB_SPACING;
+    for (const [left, right] of nearby) {
+      const width = right - left;
+      const pitch = clamp(width / Math.max(1, demand - 1), minimumPitch, spacing);
+      const count = Math.floor((width + EPSILON) / pitch) + 1;
+      const middle = (left + right) / 2;
+      const first = middle - (count - 1) * pitch / 2;
+      const closest = clamp(Math.round((preferred - first) / pitch), 0, count - 1);
+      const candidates = count <= 8 ? Array.from({length: count}, (_, i) => i) :
+        [closest, closest - 1, closest + 1, closest - 3, closest + 3, lane % count, (lane + 7) % count,
+          count - 1 - lane % count, count - 1 - (lane + 7) % count];
+      for (const i of candidates) {
+        if (i >= 0 && i < count) tracks.add(first + i * pitch);
+      }
+    }
+    return [...tracks];
+  }
+
+  function pcbEscapes(connection, port, axis, rail, protection, bounds) {
+    const [other, , , start, finish] = pcbAxis(axis);
+    const marker = protection?.ownMarkers.get(port.port);
+    const offset = marker ? Math.max(port[other] - marker[start], marker[finish] - port[other]) + 1 : 6;
+    const span = rail - port[axis];
+    const limit = other === "x" ? bounds.width : bounds.height;
+    const escapes = [];
+    for (const shift of [0, -offset, offset, -offset - 2, offset + 2]) {
+      const at = port[other] + shift;
+      if (at < 0 || at > limit) continue;
+      const end = {[axis]: rail, [other]: at};
+      // A shallower lead can move sideways past a wide label before turning toward the rail.
+      const turns = (shift ? [1, .65] : [1]).map(slope => ({
+        [axis]: port[axis] + Math.sign(span) * Math.min(Math.abs(shift) * slope, Math.abs(span)),
+        [other]: at,
+      }));
+      const turn = protection ? turns.find(point => protection.clearSegment(connection, port, point) &&
+        protection.clearSegment(connection, point, end)) : turns[0];
+      if (turn) {
+        escapes.push(shift ? [port, turn, end] : [port, end]);
+        if (escapes.length === 2) break;
+      }
+    }
+    return escapes.length ? escapes : [[port, {[axis]: rail, [other]: port[other]}]];
+  }
+
+  function pcbFanout(port, axis, track, edge, outerEdge, obstacles, bounds, lane, depth, spacing) {
+    const [other] = pcbAxis(axis);
+    const windows = pcbWindows(axis, port[other], track, obstacles, bounds);
+    const distanceToEdge = ([low, high]) => Math.max(low - edge, edge - high, 0);
+    windows.sort((a, b) => distanceToEdge(a) - distanceToEdge(b) || a[0] - b[0]);
+    const near = windows[0] ?? [port[axis], port[axis]];
+    const outer = windows.find(([low, high]) => outerEdge < edge ? high <= outerEdge : low >= outerEdge);
+    function spaced([low, high]) {
+      const width = high - low;
+      const pitch = Math.min(spacing, width / 12 * (spacing / PCB_SPACING));
+      const count = pitch > EPSILON ? Math.floor(width / pitch) + 1 : 1;
+      const first = (low + high - (count - 1) * pitch) / 2;
+      return first + (lane % count) * pitch;
+    }
+    const [low, high] = near;
+    const close = clamp(edge, low, high);
+    const opposite = close - low < high - close ? high : low;
+    return {close, spaced: spaced(near), outer: spaced(outer ?? windows[1] ?? near),
+      nested: opposite + (close - opposite) * depth};
+  }
+
+  function pcbDetours(connection, axis, obstacles, boxA, boxB, bounds, lane, laneCount, spacing, escapes, add) {
+    if (!boxA || !boxB) return;
+    const {a, b} = connection;
+    const [other, low, high] = pcbAxis(axis);
+    const forwards = boxA[high] <= boxB[low];
+    if (!forwards && boxB[high] > boxA[low]) return;
+    const firstEdge = boxA[forwards ? high : low];
+    const lastEdge = boxB[forwards ? low : high];
+    const firstOuter = boxA[forwards ? low : high];
+    const lastOuter = boxB[forwards ? high : low];
+    const middle = (a[other] + b[other]) / 2;
+    const windows = pcbWindows(other, a[axis], b[axis], obstacles, bounds);
+    const tracks = pcbTracks(windows, middle, lane, laneCount, spacing);
+    for (const rail of tracks) {
+      const [min, max] = windows.find(([low, high]) => rail >= low - EPSILON && rail <= high + EPSILON);
+      const depth = clamp((rail < middle ? max - rail : rail - min) / Math.max(1, max - min), 0, 1);
+      const firstRails = pcbFanout(a, axis, rail, firstEdge, firstOuter, obstacles, bounds, lane, depth, spacing);
+      const lastRails = pcbFanout(b, axis, rail, lastEdge, lastOuter, obstacles, bounds, 17 * lane + 5, depth, spacing);
+      // Start with the short route. Give each endpoint an independent choice of the outer bay.
+      // Nest deeper tracks closer to the devices so fan-outs do not have to cross the inner lanes.
+      for (const [p, q] of [["close", "close"], ["spaced", "spaced"], ["spaced", "outer"],
+        ["outer", "spaced"], ["outer", "outer"], ["nested", "nested"], ["nested", "outer"],
+        ["outer", "nested"], ["nested", "spaced"], ["spaced", "nested"]]) {
+        const firstRail = firstRails[p];
+        const lastRail = lastRails[q];
+        const starts = escapes(a, axis, firstRail);
+        const ends = escapes(b, axis, lastRail);
+        for (const [i, first] of starts.entries()) {
+          const last = ends[Math.min(i, ends.length - 1)];
+          add([...first, {[axis]: firstRail, [other]: rail}, {[axis]: lastRail, [other]: rail}, ...last.slice().reverse()]);
+        }
+      }
+    }
+  }
+
+  function pcbCandidates(connection, obstacles, bounds, protection, lane, laneCount, spacing, add) {
+    const {a, b} = connection;
+    const boxA = obstacles.find(box => box.id === a.device);
+    const boxB = obstacles.find(box => box.id === b.device);
+    const memo = new Map();
+    function escapes(port, axis, rail) {
+      const key = (port === a ? "A" : "B") + axis + rail;
+      if (!memo.has(key)) memo.set(key, pcbEscapes(connection, port, axis, rail, protection, bounds));
+      return memo.get(key);
+    }
+
+    for (const axis of ["x", "y"]) {
+      const [other] = pcbAxis(axis);
+      const windows = pcbWindows(axis, a[other], b[other], obstacles, bounds);
+      for (const rail of pcbTracks(windows, (a[axis] + b[axis]) / 2, lane, laneCount, spacing)) {
+        const starts = escapes(a, axis, rail);
+        const ends = escapes(b, axis, rail);
+        for (const first of starts) {
+          for (const last of ends) add([...first, ...last.slice().reverse()]);
+        }
+      }
+      pcbDetours(connection, axis, obstacles, boxA, boxB, bounds, lane, laneCount, spacing, escapes, add);
+    }
+  }
+
+  function pcbFallback(connection, obstacles, bounds, protection, add) {
+    const corridors = globalThis.NetBoxRackCorridors;
+    if (!corridors) return;
+    const areas = [...obstacles, ...(protection?.areas ?? [])];
+    const clear = (a, b) => {
+      const segment = describeSegment(a, b, false, false);
+      return (!segment || !obstacles.some(box => lengthInside(segment, box) > EPSILON)) &&
+        (!protection || protection.clearSegment(connection, a, b));
+    };
+    for (const points of corridors.candidates(connection, areas, bounds, clear)) {
+      if (points.length >= 2 && samePoint(points[0], connection.a) && samePoint(points.at(-1), connection.b)) add(points);
+    }
+  }
+
+  function pcbExitCost(port, card, next) {
+    if (!card || !next || card.right - card.left <= card.bottom - card.top) return 0;
+    const row = port.y - (card.top + card.bottom) / 2;
+    return row * (next.y - port.y) < 0 ? Math.min(64, Math.abs(row) * 5) : 0;
+  }
+
+  function candidates(connection, obstacles, bounds, protection, laneSeedLimit, pcbLane, laneCount, spacing) {
     const {a, b} = connection;
     const list = [];
     const seen = new Set();
+    const pcb = pcbLane !== undefined;
+    const unrelated = pcb ? obstacles.filter(box => box.id !== a.device && box.id !== b.device) : [];
+    const boxA = obstacles.find(box => box.id === a.device);
+    const boxB = obstacles.find(box => box.id === b.device);
 
     function add(points, onlyClear = false) {
       const fitted = fitPoints(points, bounds);
-      const key = fitted.map(({x, y}) => protection
+      const key = fitted.map(({x, y}) => protection || pcb
         ? x + ":" + y
         : Math.round(x * 2) + ":" + Math.round(y * 2)).join("/");
       if (seen.has(key)) return;
       seen.add(key);
       const segments = describeSegments(fitted);
       const obstruction = protection?.measure(segments, connection) ?? {ports: 0, labels: 0, depth: 0};
+      if (pcb) {
+        obstruction.cards = unrelated.filter(box => segments.some(segment => lengthInside(segment, box) > EPSILON)).length;
+      }
       if (onlyClear && (obstruction.ports || obstruction.labels)) return;
+      let base = routeScore(segments, obstacles, a, b) + 2 * obstruction.depth / 100;
+      if (pcb && boxA !== boxB) {
+        base = .75 * base + pcbExitCost(a, boxA, fitted[1]) + pcbExitCost(b, boxB, fitted.at(-2));
+      }
       list.push({
         points: fitted.map(({x, y}) => ({x, y})),
         segments,
         box: pathBounds(fitted),
-        base: routeScore(segments, obstacles, a, b) + 2 * obstruction.depth / 100,
+        base,
         obstruction,
       });
     }
@@ -456,6 +643,12 @@
     add([a, b]);
     const direct = list[0].segments[0];
     if (!direct) return list;
+    const order = (p, q) => compareObstruction(p.obstruction, q.obstruction) || p.base - q.base;
+    if (pcb) {
+      pcbCandidates(connection, obstacles, bounds, protection, pcbLane, laneCount, spacing, add);
+      if (!list.some(isClear)) pcbFallback(connection, unrelated, bounds, protection, add);
+      if (list.some(isClear)) return list.sort(order);
+    }
 
     const start = pointOnSegment(a, b, .28);
     const end = pointOnSegment(a, b, .72);
@@ -469,8 +662,6 @@
       }
     }
 
-    const boxA = obstacles.find((box) => box.id === a.device);
-    const boxB = obstacles.find((box) => box.id === b.device);
     bypassObstacles(a, b, obstacles, direct, add);
     for (const axis of ["x", "y"]) {
       bridgeCards(a, b, boxA, boxB, axis, add);
@@ -482,10 +673,10 @@
       if (list.filter(isClear).length < 3) protectedCandidates(connection, protection, bounds, list, add);
       addLaneAlternatives(list, add, laneSeedLimit);
     }
-    return list.sort((p, q) => compareObstruction(p.obstruction, q.obstruction) || p.base - q.base);
+    return list.sort(order);
   }
 
-  function parallelCost(a, b, dx, dy, sin) {
+  function parallelCost(a, b, dx, dy, sin, spacing, pcb) {
     const along = dx * a.ux + dy * a.uy;
     const cosine = a.ux * b.ux + a.uy * b.uy;
     const end = along + b.length * cosine;
@@ -495,34 +686,39 @@
     const perpendicular = cross(a.ux, a.uy, dx, dy);
     const gradient = sin / cosine;
     if (Math.abs(gradient) > EPSILON) {
-      const enters = along + (-WIRE_SPACING - perpendicular) / gradient;
-      const exits = along + (WIRE_SPACING - perpendicular) / gradient;
+      const enters = along + (-spacing - perpendicular) / gradient;
+      const exits = along + (spacing - perpendicular) / gradient;
       from = Math.max(from, Math.min(enters, exits));
       to = Math.min(to, Math.max(enters, exits));
       if (to <= from) return 0;
-    } else if (Math.abs(perpendicular) >= WIRE_SPACING) {
+    } else if (Math.abs(perpendicular) >= spacing) {
       return 0;
     }
     const separation = Math.abs(perpendicular + ((from + to) / 2 - along) * gradient);
-    return (to - from) * (0.3 + 2.3 * (1 - separation / WIRE_SPACING));
+    const closeness = 1 - separation / spacing;
+    const weight = pcb ? .25 + 3.65 * closeness * closeness : .3 + 2.3 * closeness;
+    // On paper, coincident strokes can make two patch leads look like one.
+    const mergedStroke = pcb && spacing > PCB_SPACING ? 8 * Math.max(0, 1 - separation / 2) ** 2 : 0;
+    return (to - from) * (weight + mergedStroke);
   }
 
   function isEndpoint(segment, at) {
     return (segment.first && at < EPSILON) || (segment.last && segment.length - at < EPSILON);
   }
 
-  function near(a, b) {
-    return a.right + WIRE_SPACING >= b.left && b.right + WIRE_SPACING >= a.left &&
-      a.bottom + WIRE_SPACING >= b.top && b.bottom + WIRE_SPACING >= a.top;
+  function near(a, b, spacing) {
+    return a.right + spacing >= b.left && b.right + spacing >= a.left &&
+      a.bottom + spacing >= b.top && b.bottom + spacing >= a.top;
   }
 
-  function pairCost(first, second, budget) {
-    if (!near(first.box, second.box)) return 0;
+  function pairCost(first, second, budget, pcb, spacing) {
+    const reach = Math.max(WIRE_SPACING, spacing);
+    if (!near(first.box, second.box, reach)) return 0;
     let cost = 0;
     let intersections;
     for (const a of first.segments) {
       for (const b of second.segments) {
-        if (!near(a, b)) continue;
+        if (!near(a, b, reach)) continue;
 
         const dx = b.x - a.x;
         const dy = b.y - a.y;
@@ -530,7 +726,9 @@
         const angle = Math.abs(sin);
         if (angle < .3) {
           // Average both projections so the cost is independent of route evaluation order.
-          cost += (parallelCost(a, b, dx, dy, sin) + parallelCost(b, a, -dx, -dy, -sin)) / 2;
+          const penalty = (parallelCost(a, b, dx, dy, sin, spacing, pcb) +
+            parallelCost(b, a, -dx, -dy, -sin, spacing, pcb)) / 2;
+          cost += pcb ? 3 * penalty : penalty;
         }
         if (angle > EPSILON) {
           const t = cross(dx, dy, b.ux, b.uy) / sin;
@@ -541,7 +739,7 @@
             const y = a.y + a.uy * t;
             if (!intersections?.some((point) => Math.abs(point.x - x) < .5 && Math.abs(point.y - y) < .5)) {
               (intersections ??= []).push({x, y});
-              cost += 29 + 13 * (1 - angle);
+              cost += pcb ? 45 + 55 * (1 - angle) : 29 + 13 * (1 - angle);
             }
           }
         }
@@ -615,7 +813,7 @@
     return {set, visit};
   }
 
-  function choose(entry, entries, index, candidateLimit) {
+  function choose(entry, entries, index, candidateLimit, pcb, spacing) {
     let best = null;
     let bestScore = Infinity;
     const leastObstruction = entry.candidates[0].obstruction;
@@ -624,7 +822,7 @@
       if (compareObstruction(candidate.obstruction, leastObstruction) || candidate.base >= bestScore) break;
       let score = candidate.base;
       const addCost = (other) => {
-        if (entry !== other && other.route) score += pairCost(candidate, other.route, bestScore - score);
+        if (entry !== other && other.route) score += pairCost(candidate, other.route, bestScore - score, pcb, spacing);
         return score < bestScore;
       };
       if (index) {
@@ -642,24 +840,31 @@
     return best;
   }
 
-  function routeCables(connections, obstacles, bounds, protectedAreas = []) {
+  function routeCables(connections, obstacles, bounds, protectedAreas = [], {strategy, spacing = PCB_SPACING} = {}) {
+    const pcb = strategy === "pcb";
+    const wireSpacing = pcb
+      ? clamp(Number.isFinite(spacing) ? spacing : PCB_SPACING, PCB_SPACING, WIRE_CELL_SIZE)
+      : WIRE_SPACING;
     const protection = protectionIndex([...protectedAreas].sort(orderAreas), bounds);
     const deviceBoxes = [...obstacles].sort(orderAreas);
     const laneSeedLimit = connections.length > 128 ? 1 : 2;
-    const entries = connections.map((connection) => ({
+    const ordered = pcb ? [...connections].sort((a, b) =>
+      a.a.x + a.b.x - b.a.x - b.b.x || a.a.y + a.b.y - b.a.y - b.b.y || orderKey(a.id, b.id)) : connections;
+    const entries = ordered.map((connection, lane) => ({
       id: connection.id,
       length: distance(connection.a, connection.b),
-      candidates: candidates(connection, deviceBoxes, bounds, protection, laneSeedLimit),
+      candidates: candidates(connection, deviceBoxes, bounds, protection, laneSeedLimit, pcb ? lane : undefined,
+        ordered.length, wireSpacing),
       route: null,
     })).sort((a, b) => {
       return a.length - b.length || orderKey(a.id, b.id);
     });
 
     const index = entries.length > 96 ? wireIndex(entries, bounds) : null;
-    const candidateLimit = entries.length > 256 ? 14 : (entries.length > 128 ? 22 : Infinity);
+    const candidateLimit = entries.length > 256 ? 14 : entries.length > 128 ? 22 : pcb ? 80 : Infinity;
     entries.forEach((entry, i) => { entry.index = i; });
     function place(entry) {
-      const route = choose(entry, entries, index, candidateLimit);
+      const route = choose(entry, entries, index, candidateLimit, pcb, wireSpacing);
       if (route === entry.route) return false;
       if (index) index.set(entry, route);
       else entry.route = route;

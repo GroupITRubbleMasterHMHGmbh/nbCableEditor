@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const {test} = require("node:test");
 
 require("../netbox_rack_editor/static/netbox_rack_editor/rack-routing.js");
+require("../netbox_rack_editor/static/netbox_rack_editor/rack-corridors.js");
 
 const {routeCables} = globalThis.NetBoxRackRouting;
 
@@ -160,4 +161,138 @@ test("the corridor fallback validates endpoint exemption and wins with the only 
   } finally {
     globalThis.NetBoxRackCorridors = previous;
   }
+});
+
+function sharedTrackLength(routes) {
+  const segments = [...routes.values()].flatMap((points, route) => points.slice(1).map((b, i) => ({
+    a: points[i], b, route,
+  })));
+  let shared = 0;
+  for (const [i, first] of segments.entries()) {
+    const {a, b} = first;
+    const axis = a.x === b.x ? "y" : a.y === b.y ? "x" : null;
+    if (axis === null) continue;
+    const fixed = axis === "x" ? "y" : "x";
+    const low = Math.min(a[axis], b[axis]);
+    const high = Math.max(a[axis], b[axis]);
+    for (let j = 0; j < i; j++) {
+      const second = segments[j];
+      if (second.route === first.route || second.a[fixed] !== a[fixed] || second.b[fixed] !== a[fixed]) continue;
+      shared += Math.max(0, Math.min(high, Math.max(second.a[axis], second.b[axis])) -
+        Math.max(low, Math.min(second.a[axis], second.b[axis])));
+    }
+  }
+  return shared;
+}
+
+function pcbFixture(interveningCard) {
+  const bounds = {width: 660, height: 260};
+  const obstacles = [
+    {id: "A", left: 80, top: 25, right: 580, bottom: 69},
+    {id: "B", left: 80, top: interveningCard ? 156 : 95, right: 580, bottom: interveningCard ? 200 : 139},
+  ];
+  if (interveningCard) obstacles.push({id: "C", left: 80, top: 89, right: 580, bottom: 137});
+  const protectedAreas = [];
+  function port(card, index) {
+    const x = card.left + 23 + (index % 24) * 19.5;
+    const y = card.top + 13 + Math.floor(index / 24) * 18;
+    const port = card.id + index;
+    protectedAreas.push(
+      {port, kind: "port", left: x - 5.75, top: y - 5.75, right: x + 5.75, bottom: y + 5.75},
+      {port, kind: "label", left: x - 6.5, top: y - 15, right: x + 6.5, bottom: y - 7},
+    );
+    return {x, y, port, device: card.id};
+  }
+  const permutation = Array.from({length: 48}, (_, i) => i);
+  let seed = 10;
+  for (let i = permutation.length - 1; i > 0; i--) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const j = seed % (i + 1);
+    [permutation[i], permutation[j]] = [permutation[j], permutation[i]];
+  }
+  const connections = permutation.map((to, id) => ({id, a: port(obstacles[0], id), b: port(obstacles[1], to)}));
+  return {bounds, obstacles, protectedAreas, connections};
+}
+
+function assertPcbPaths(routes, {bounds, obstacles, protectedAreas, connections}) {
+  assert.equal(routes.size, connections.length);
+  for (const {id, a, b} of connections) {
+    const points = routes.get(id);
+    assert.deepEqual(points[0], {x: a.x, y: a.y});
+    assert.deepEqual(points.at(-1), {x: b.x, y: b.y});
+    assert.ok(points.every(({x, y}) => x >= 0 && x <= bounds.width && y >= 0 && y <= bounds.height));
+    for (const card of obstacles) {
+      if (card.id !== a.device && card.id !== b.device) assertOutsideArea(points, card);
+    }
+    for (const area of protectedAreas) {
+      if (area.kind === "port" && area.port === a.port) assertOutsideArea(points.slice(1), area);
+      else if (area.kind === "port" && area.port === b.port) assertOutsideArea(points.slice(0, -1), area);
+      else assertOutsideArea(points, area);
+    }
+  }
+}
+
+test("PCB tracks separate dense arbitrary 48-port wiring and preserve the balanced default", () => {
+  const fixture = pcbFixture(false);
+  const {bounds, obstacles, protectedAreas, connections} = fixture;
+  const balanced = routeCables(connections, obstacles, bounds, protectedAreas);
+  assert.deepEqual(balanced, routeCables(connections, obstacles, bounds, protectedAreas, {strategy: "balanced"}));
+  const pcb = routeCables(connections, obstacles, bounds, protectedAreas, {strategy: "pcb"});
+  assert.deepEqual(pcb, routeCables([...connections].reverse(), [...obstacles].reverse(), bounds,
+    [...protectedAreas].reverse(), {strategy: "pcb"}));
+  assertPcbPaths(pcb, fixture);
+  assert.ok(crossingCount(pcb) < crossingCount(balanced) * .75);
+  assert.ok(sharedTrackLength(pcb) < sharedTrackLength(balanced) * .25);
+});
+
+test("PCB keeps a dense bundle off intervening equipment using both sides", () => {
+  const fixture = pcbFixture(true);
+  const {bounds, obstacles, protectedAreas, connections} = fixture;
+  const routes = routeCables(connections, obstacles, bounds, protectedAreas, {strategy: "pcb"});
+  assertPcbPaths(routes, fixture);
+  const card = obstacles[2];
+  const paths = [...routes.values()];
+  assert.ok(paths.some(points => points.some(({x}) => x < card.left)));
+  assert.ok(paths.some(points => points.some(({x}) => x > card.right)));
+  assert.ok(sharedTrackLength(routes) < 4_000);
+});
+
+test("PCB bypasses a horizontal barrier using the only open route above or below it", () => {
+  const a = {x: 38, y: 86, device: "A"};
+  const b = {x: 282, y: 91, device: "B"};
+  const equipment = [
+    {id: "A", left: 24, top: 49, right: 57, bottom: 132},
+    {id: "B", left: 263, top: 43, right: 298, bottom: 131},
+  ];
+  const bounds = {width: 320, height: 180};
+  for (const [top, bottom, outside] of [[25, 180, ({y}) => y < 25], [0, 153, ({y}) => y > 153]]) {
+    const card = {id: "C", left: 82, top, right: 242, bottom};
+    const [points] = routeCables([{id: 1, a, b}], [...equipment, card], bounds, [], {strategy: "pcb"}).values();
+    assertOutsideArea(points, card);
+    assert.ok(points.some(outside));
+  }
+});
+
+test("PCB can leave an upper port towards the space above its card past a wide label", () => {
+  const bounds = {width: 320, height: 300};
+  const a = {x: 160, y: 72, device: "A", port: 1};
+  const b = {x: 180, y: 220, device: "B", port: 2};
+  const obstacles = [
+    {id: "A", left: 50, top: 60, right: 270, bottom: 100},
+    {id: "B", left: 50, top: 194, right: 270, bottom: 236},
+    {id: "panel", left: 50, top: 112, right: 270, bottom: 180},
+  ];
+  const protectedAreas = [
+    {port: 1, kind: "port", left: 154.25, top: 66.25, right: 165.75, bottom: 77.75},
+    {port: 1, kind: "label", left: 153.5, top: 54, right: 166.5, bottom: 66.5},
+    {port: 3, kind: "label", left: 144, top: 54, right: 153.3, bottom: 98},
+    {port: 4, kind: "label", left: 167.1, top: 54, right: 176, bottom: 98},
+    {port: 5, kind: "port", left: 153.3, top: 79, right: 167.1, bottom: 98},
+  ];
+  const connections = [{id: 1, a, b}];
+  const routes = routeCables(connections, obstacles, bounds, protectedAreas, {strategy: "pcb"});
+  assertPcbPaths(routes, {bounds, obstacles, protectedAreas, connections});
+  const points = routes.get(1);
+  assert.ok(points[1].y < a.y);
+  assert.ok(points.some(({y}) => y < obstacles[0].top));
 });
