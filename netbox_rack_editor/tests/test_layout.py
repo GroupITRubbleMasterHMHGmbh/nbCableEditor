@@ -1,11 +1,15 @@
 from core.models import ObjectType
-from dcim.choices import CableTypeChoices, InterfaceModeChoices, InterfaceTypeChoices, PortTypeChoices
+from dcim.choices import (
+    CableTypeChoices, InterfaceDuplexChoices, InterfaceModeChoices, InterfacePoEModeChoices, InterfacePoETypeChoices,
+    InterfaceTypeChoices, PortTypeChoices,
+)
 from dcim.models import (
     Cable, Device, DeviceRole, DeviceType, FrontPort, FrontPortTemplate, Interface, InterfaceTemplate, Manufacturer,
     PortMapping, Rack, RearPort, RearPortTemplate, Site,
 )
+from django.core.exceptions import ValidationError
 from django.urls import reverse
-from extras.models import JournalEntry
+from extras.models import CustomField, JournalEntry
 from ipam.models import VLAN
 from users.models import ObjectPermission
 from utilities.testing import TestCase
@@ -172,15 +176,21 @@ class RackLayoutTestCase(TestCase):
         self.assertEqual(ports[first.pk]["occupancy"], "cabled")
 
     def test_vlan_fields_respect_object_permissions(self):
-        native = VLAN.objects.create(vid=10, name="Management")
-        visible = VLAN.objects.create(vid=20, name="Voice")
-        restricted = VLAN.objects.create(vid=30, name="Restricted VLAN")
+        native = VLAN.objects.create(vid=10, name="Management", custom_field_data={"editorColorHex": "#16a34a"})
+        visible = VLAN.objects.create(vid=20, name="Voice", custom_field_data={"editorColorHex": "red"})
+        restricted = VLAN.objects.create(vid=30, name="Restricted VLAN", custom_field_data={"editorColorHex": "#ff0000"})
         visible_high = VLAN.objects.create(vid=40, name="Guest")
         first = Interface.objects.get(device=self.device, name=self.first.name)
         last = Interface.objects.get(device=self.device, name=self.last.name)
         first.mode = InterfaceModeChoices.MODE_TAGGED
+        first.poe_mode = InterfacePoEModeChoices.MODE_PSE
+        first.poe_type = InterfacePoETypeChoices.TYPE_2_8023AT
         first.untagged_vlan = native
         first.description = "Access switch uplink"
+        first.speed = 1_000_000
+        first.duplex = InterfaceDuplexChoices.DUPLEX_FULL
+        first.mtu = 9000
+        first.mgmt_only = True
         first.save()
         first.tagged_vlans.add(restricted, visible_high, visible)
         last.mode = InterfaceModeChoices.MODE_ACCESS
@@ -195,17 +205,36 @@ class RackLayoutTestCase(TestCase):
         self.assertEqual(ports[first.pk]["vlanMode"], InterfaceModeChoices.MODE_TAGGED)
         self.assertEqual(ports[first.pk]["description"], first.description)
         self.assertEqual(ports[first.pk]["type"], first.get_type_display())
+        self.assertEqual(ports[first.pk]["poeMode"], first.get_poe_mode_display())
+        self.assertEqual(ports[first.pk]["poeType"], first.get_poe_type_display())
+        self.assertEqual(ports[first.pk]["vlanModeDisplay"], first.get_mode_display())
+        self.assertEqual(ports[first.pk]["speedKbps"], 1_000_000)
+        self.assertEqual(ports[first.pk]["duplex"], first.get_duplex_display())
+        self.assertEqual(ports[first.pk]["mtu"], 9000)
+        self.assertTrue(ports[first.pk]["managementOnly"])
         self.assertIsNone(ports[first.pk]["untaggedVlan"])
         self.assertEqual(ports[first.pk]["taggedVlans"], [])
 
         self.restrict_view(VLAN, {"pk__in": [native.pk, visible.pk, visible_high.pk]})
         ports = get_ports()
-        self.assertEqual(ports[first.pk]["untaggedVlan"], {"vid": 10, "name": "Management"})
+        self.assertEqual(ports[first.pk]["untaggedVlan"], {"vid": 10, "name": "Management", "color": "#16A34A"})
         self.assertEqual(
             ports[first.pk]["taggedVlans"], [{"vid": 20, "name": "Voice"}, {"vid": 40, "name": "Guest"}],
         )
         self.assertEqual(ports[last.pk]["vlanMode"], InterfaceModeChoices.MODE_ACCESS)
         self.assertIsNone(ports[last.pk]["untaggedVlan"])
+        self.assertEqual(ports[last.pk]["poeMode"], "")
+        self.assertEqual(ports[last.pk]["poeType"], "")
+
+    def test_vlan_editor_color_is_an_optional_validated_vlan_field(self):
+        field = CustomField.objects.get(name="editorColorHex", object_types__app_label="ipam", object_types__model="vlan")
+        self.assertEqual(field.type, "text")
+        self.assertFalse(field.required)
+        for color in (None, "#16a34a", "#FF0000"):
+            field.validate(color)
+        for invalid in ("red", "16a34a", "#fff", "#16A34A\n"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                field.validate(invalid)
 
     def test_remote_endpoint_metadata_respects_interface_rack_and_type_visibility(self):
         native = VLAN.objects.create(vid=15, name="Remote native")
@@ -213,6 +242,11 @@ class RackLayoutTestCase(TestCase):
         self.add_permissions("ipam.view_vlan")
         local = Interface.objects.get(device=self.device, name=self.first.name)
         remote = Interface.objects.get(device=self.external, name=self.first.name)
+        remote.label = "Office uplink"
+        remote.description = "Patch lead to the remote rack."
+        remote.enabled = False
+        remote.poe_mode = InterfacePoEModeChoices.MODE_PSE
+        remote.poe_type = InterfacePoETypeChoices.TYPE_2_8023AT
         remote.mode = InterfaceModeChoices.MODE_TAGGED
         remote.untagged_vlan = native
         remote.save()
@@ -226,11 +260,20 @@ class RackLayoutTestCase(TestCase):
         endpoint = get_cable()["endpointA"]
         self.assertEqual(endpoint, {
             "kind": "interface",
+            "label": remote.label,
+            "description": remote.description,
+            "enabled": False,
+            "type": remote.get_type_display(),
+            "poeMode": remote.get_poe_mode_display(),
+            "poeType": remote.get_poe_type_display(),
             "deviceName": self.external.name,
+            "deviceUrl": self.external.get_absolute_url(),
             "portName": remote.name,
+            "portUrl": remote.get_absolute_url(),
             "deviceType": self.device_type.model,
             "rackName": self.other_rack.name,
             "vlanMode": InterfaceModeChoices.MODE_TAGGED,
+            "vlanModeDisplay": remote.get_mode_display(),
             "untaggedVlan": {"vid": 15, "name": "Remote native"},
             "taggedVlans": [{"vid": 25, "name": "Remote tagged"}],
         })
@@ -242,14 +285,9 @@ class RackLayoutTestCase(TestCase):
         self.assertEqual(restricted["b"], local.pk)
         self.assertFalse(restricted["editable"])
         self.assertFalse(restricted["deletable"])
-        self.assertEqual(restricted["endpointA"], {
-            "kind": "interface",
-            "deviceName": self.external.name,
-            "portName": remote.name,
-            "vlanMode": InterfaceModeChoices.MODE_TAGGED,
-            "untaggedVlan": None,
-            "taggedVlans": [],
-        })
+        expected = {**endpoint, "untaggedVlan": None, "taggedVlans": []}
+        del expected["deviceType"], expected["rackName"]
+        self.assertEqual(restricted["endpointA"], expected)
 
         self.restrict_view(Interface, {"device_id": self.device.pk})
         self.assertIsNone(get_cable()["endpointA"])
@@ -307,6 +345,10 @@ class RackLayoutTestCase(TestCase):
         self.assertEqual(backbone_row["a"], rear_id)
         self.assertIsNone(backbone_row["b"])
         self.assertEqual(backbone_row["endpointB"]["portName"], outlet_rear.name)
+        self.assertEqual(backbone_row["endpointB"]["portUrl"], outlet_rear.get_absolute_url())
+        self.assertEqual(backbone_row["endpointB"]["deviceUrl"], self.external.get_absolute_url())
+        self.assertEqual(backbone_row["endpointB"]["type"], outlet_rear.get_type_display())
+        self.assertNotIn("vlanMode", backbone_row["endpointB"])
         self.assertFalse(backbone_row["editable"])
         self.assertFalse(backbone_row["deletable"])
         self.assertIsNone(lead_row["traceA"])
@@ -320,12 +362,22 @@ class RackLayoutTestCase(TestCase):
         self.assertEqual([hop.get("portId") for hop in trace["hops"]], [switch_port.pk, front_id, rear_id, None, None])
         self.assertEqual(trace["segments"], [{"id": backbone.pk, "a": rear_id, "b": None, "color": "cc8833"}])
 
+        client_vlan = VLAN.objects.create(vid=20, name="Client network")
+        client_port.mode = InterfaceModeChoices.MODE_ACCESS
+        client_port.untagged_vlan = client_vlan
+        client_port.save()
+        self.add_permissions("ipam.view_vlan")
         drop = Cable.objects.create(a_terminations=[outlet_front], b_terminations=[client_port])
         trace = read_lead()["traceB"]
         self.assertEqual(trace["status"], "complete")
         self.assertTrue(trace["active"])
         self.assertEqual(trace["hops"][-1]["deviceName"], client.name)
         self.assertEqual(trace["hops"][-1]["portName"], client_port.name)
+        self.assertEqual(trace["hops"][-1]["deviceUrl"], client.get_absolute_url())
+        self.assertEqual(trace["hops"][-1]["portUrl"], client_port.get_absolute_url())
+        self.assertEqual(trace["hops"][-1]["type"], client_port.get_type_display())
+        self.assertEqual(trace["hops"][-1]["vlanModeDisplay"], client_port.get_mode_display())
+        self.assertEqual(trace["hops"][-1]["untaggedVlan"], {"vid": 20, "name": "Client network"})
         self.assertNotIn("portId", trace["hops"][-1])
         self.assertEqual([segment["id"] for segment in trace["segments"]], [backbone.pk, drop.pk])
 
@@ -334,6 +386,7 @@ class RackLayoutTestCase(TestCase):
         self.assertEqual(trace["status"], "restricted")
         self.assertNotIn("active", trace)
         self.assertEqual([hop["portName"] for hop in trace["hops"]], [switch_port.name, panel_front.name, panel_rear.name])
+        self.assertNotIn(client_port.get_absolute_url(), [hop["portUrl"] for hop in trace["hops"]])
         self.assertEqual(trace["segments"], [])
 
         self.remove_permissions("dcim.view_rearport")

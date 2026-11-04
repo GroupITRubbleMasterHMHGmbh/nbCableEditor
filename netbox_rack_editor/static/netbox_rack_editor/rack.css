@@ -6,7 +6,12 @@
   --re-rack-free: #18a880;
   --re-rack-connected: #e8a632;
   --re-rack-blocked: #778397;
+  --re-rack-free-stroke: #24d99a;
+  --re-rack-connected-stroke: #ffb94f;
+  --re-rack-blocked-stroke: #a9b7ca;
+  --re-rack-port-keyline: #111c2e;
   --re-rack-muted-port: #c6ccd4;
+  --re-rack-muted-stroke: #8995a8;
   --re-rack-muted-cable: #a5afbc;
   --re-rack-muted-cable-outline: #8793a2;
   --re-rack-target: #36baff;
@@ -15,37 +20,36 @@
   --re-rack-trace-accent: color-mix(in srgb, #148578 62%, var(--re-rack-text));
 }
 
-:root[data-bs-theme="dark"] .re-rack {
+:where(:root[data-bs-theme="dark"]) .re-rack {
+  --re-rack-free-stroke: #58ecb1;
+  --re-rack-connected-stroke: #ffc76b;
+  --re-rack-blocked-stroke: #a4b2c7;
   --re-rack-muted-port: #828c9a;
+  --re-rack-muted-stroke: #758298;
   --re-rack-muted-cable: #555f6f;
   --re-rack-muted-cable-outline: #697687;
 }
 
-.re-rack[data-interface-highlight-mode="free"] { --re-rack-free: #13bc49; }
+.re-rack[data-interface-highlight-mode="free"] {
+  --re-rack-free: #13bc49;
+  --re-rack-free-stroke: #4be778;
+}
 
 .re-rack [hidden] { display: none !important; }
 
-.re-rack-heading,
-.re-rack-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: .6rem 1rem;
-}
-
 .re-rack-workspace {
   --re-rack-sidebar-width: clamp(16rem, 25%, 22rem);
+  --re-rack-workspace-gap: .55rem;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--re-rack-sidebar-width);
-  gap: 1rem;
+  gap: var(--re-rack-workspace-gap);
   align-items: start;
 }
 
 @media (min-width: 951px) {
-  .re-rack-workspace:not([data-view-no-sidebar]):has(.re-rack-board[data-trimmed]) {
+  .re-rack-workspace:not([data-view-no-sidebar], [data-fit]):has(.re-rack-board[data-trimmed]) {
     grid-template-columns: min(
-      calc(100% - var(--re-rack-sidebar-width) - 1rem),
+      calc(100% - var(--re-rack-sidebar-width) - var(--re-rack-workspace-gap)),
       max(30rem, calc(var(--re-rack-trim-width) + 1.25rem))
     ) minmax(0, 1fr);
   }
@@ -53,24 +57,45 @@
 
 .re-rack-workspace[data-view-no-sidebar] { grid-template-columns: minmax(0, 1fr); }
 
-.re-rack-quick-toolbar {
+.re-rack-toolbar {
   grid-column: 1 / -1;
   display: grid;
-  gap: .5rem;
-  padding: .65rem .8rem;
+  gap: .25rem;
+  min-width: 0;
+  padding: .3rem .5rem;
 }
 
-.re-rack-quick-controls,
-.re-rack-mode-buttons,
+.re-rack-toolbar-controls,
 .re-rack-quick-actions,
-.re-rack-history-buttons {
+.re-rack-toolbar-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: .35rem;
+  gap: .25rem .4rem;
 }
 
-.re-rack-quick-controls { gap: .5rem .8rem; }
+.re-rack-toolbar-controls { gap: .3rem .6rem; }
+
+.re-rack-toolbar-title {
+  min-width: 0;
+  max-width: min(15rem, 100%);
+  margin: 0;
+  overflow: hidden;
+  color: var(--re-rack-text);
+  font-size: .88rem;
+  font-weight: 650;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.re-rack-toolbar-title a { color: inherit; }
+.re-rack-toolbar-title i { color: var(--tblr-secondary-color, #576479); }
+.re-rack-toolbar-actions { margin-inline-start: auto; }
+.re-rack-toolbar .btn-sm { --tblr-btn-padding-x: .45rem; }
+.re-rack-toolbar .re-rack-icon-button { min-width: 1.65rem; }
+.re-rack-quick-actions:not(:has(> :not([hidden]))) { display: none; }
+.re-rack-quick-status { padding-inline: .12rem; }
 
 .re-rack-mode-buttons [aria-pressed="true"],
 .re-rack-face-choices > [aria-pressed="true"] {
@@ -78,8 +103,6 @@
   border-color: currentColor;
   background: var(--tblr-primary-lt, #e9f1fb);
 }
-
-.re-rack-history-buttons { margin-inline-start: auto; }
 
 .re-rack-export-options {
   display: grid;
@@ -96,12 +119,6 @@
 }
 
 .re-rack-panel { min-width: 0; }
-
-.re-rack-toolbar {
-  justify-content: flex-start;
-  padding: .65rem .8rem;
-  border-bottom: 1px solid var(--re-rack-border);
-}
 
 .re-rack-bundle-panel {
   display: grid;
@@ -167,6 +184,13 @@
   gap: .35rem;
 }
 
+.re-rack-filter-controls [data-cable-focus-clear] {
+  max-width: min(13rem, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .re-rack-device-filter { position: relative; }
 
 .re-rack-filter-summary {
@@ -228,6 +252,11 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   font-size: .72rem;
 }
 
+.re-rack-vlan-color-configure {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
 .re-rack-device-options .form-check,
 .re-rack-view-options .form-check { margin-bottom: .25rem; }
 
@@ -276,8 +305,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-row-option-toggle .form-check-label { overflow-wrap: anywhere; }
 .re-rack-row-only { flex-shrink: 0; }
 
-.re-rack-legend,
-.re-rack-option {
+.re-rack-legend {
   display: inline-flex;
   align-items: center;
   gap: .35rem;
@@ -285,8 +313,14 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   font-size: .78rem;
 }
 
-.re-rack-option:first-of-type { margin-inline-start: auto; }
-.re-rack-option .form-select { width: auto; }
+.re-rack-port-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .55rem;
+  margin-top: .5rem;
+  padding-top: .45rem;
+  border-top: 1px solid var(--re-rack-border);
+}
 
 .re-rack-vlan-filter,
 .re-rack-vlan-legend,
@@ -312,6 +346,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-vlan-status[data-error] { color: var(--tblr-danger, #b91c1c); }
+.re-rack-vlan-status:empty { display: none; }
 
 .re-rack :is([data-vlan-match="untagged"], [data-vlan-key="untagged"]) {
   --re-rack-vlan-accent: var(--re-rack-vlan-untagged);
@@ -338,19 +373,40 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-dot {
-  width: .65rem;
-  height: .65rem;
-  border-radius: 50%;
+  width: .78rem;
+  height: .62rem;
+  border-radius: 2px;
   background: var(--re-port-color);
   flex: 0 0 auto;
 }
 
 .re-rack-dot-free,
-.re-rack-port-free { --re-port-color: var(--re-rack-free); }
+.re-rack-port-free {
+  --re-port-stroke: var(--re-rack-free-stroke);
+  --re-port-stroke-inline: var(--re-rack-port-keyline);
+  --re-port-color: var(--re-rack-free);
+}
 .re-rack-dot-connected,
-.re-rack-port-connected { --re-port-color: var(--re-rack-connected); }
+.re-rack-port-connected {
+  --re-port-stroke: var(--re-rack-connected-stroke);
+  --re-port-color: var(--re-rack-connected);
+}
 .re-rack-dot-blocked,
-.re-rack-port-blocked { --re-port-color: var(--re-rack-blocked); }
+.re-rack-port-blocked {
+  --re-port-stroke: var(--re-rack-blocked-stroke);
+  --re-port-stroke-block: var(--re-rack-port-keyline);
+  --re-port-color: var(--re-rack-blocked);
+}
+
+.re-rack-legend .re-rack-dot,
+.re-rack[data-port-fill="vlan"] .re-rack-dot {
+  box-sizing: border-box;
+  border: 2px solid;
+  border-block-color: var(--re-port-stroke-block, var(--re-port-stroke));
+  border-inline-color: var(--re-port-stroke-inline, var(--re-port-stroke));
+  background: transparent;
+  box-shadow: 0 0 0 1px var(--re-rack-port-keyline);
+}
 
 .re-rack-scroll {
   overflow: auto;
@@ -359,17 +415,29 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   background: var(--re-rack-bg);
 }
 
+.re-rack-workspace[data-fit] .re-rack-scroll { max-height: var(--re-rack-fit-height, 70vh); }
+
 .re-rack-board {
   --re-rack-board-min-width: 46rem;
-  --re-rack-route-space-start: 0rem;
-  --re-rack-route-space-end: 0rem;
+  --re-rack-route-space-start: .9rem;
+  --re-rack-route-space-end: 2rem;
+  --re-rack-route-top: 1.55rem;
+  --re-rack-route-bottom: 1.55rem;
+  --re-rack-extra-bay: 0px;
+  --re-rack-side-bay: var(--re-rack-extra-bay);
+  --re-rack-end-bay: calc(var(--re-rack-extra-bay) / 3);
+  --re-rack-detail-scale: 1;
+  --re-rack-cable-scale: 1;
   position: relative;
   isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 4.25rem minmax(0, 1fr);
   min-width: calc(var(--re-rack-zoom, 1) * var(--re-rack-board-min-width) +
-    var(--re-rack-route-space-start) + var(--re-rack-route-space-end));
-  padding: .75rem;
+    var(--re-rack-route-space-start) + var(--re-rack-route-space-end) + 2 * var(--re-rack-side-bay));
+  padding-block: calc(var(--re-rack-route-top) + var(--re-rack-end-bay))
+    calc(var(--re-rack-route-bottom) + var(--re-rack-end-bay));
+  padding-inline: calc(.75rem + var(--re-rack-route-space-start) + var(--re-rack-side-bay))
+    calc(.75rem + var(--re-rack-route-space-end) + var(--re-rack-side-bay));
 }
 
 .re-rack-board:is([data-rack-face="front"], [data-rack-face="rear"]) {
@@ -379,15 +447,39 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-board[data-routing-strategy="pcb"] {
   /* The unit labels already leave room for lanes on the start side. */
-  --re-rack-route-space-start: 4.5rem;
-  --re-rack-route-space-end: 6.75rem;
-  padding-block: 3.75rem 5.25rem;
-  padding-inline: calc(.75rem + var(--re-rack-route-space-start)) calc(.75rem + var(--re-rack-route-space-end));
+  --re-rack-route-space-start: 5rem;
+  --re-rack-route-space-end: 7.5rem;
+  --re-rack-route-top: 4.25rem;
+  --re-rack-route-bottom: 5.75rem;
 }
 
 .re-rack-board[data-routing-strategy="pcb"][data-rack-face="both"] {
   --re-rack-board-min-width: 48.5rem;
   grid-template-columns: minmax(0, 1fr) 6.75rem minmax(0, 1fr);
+}
+
+.re-rack-board[data-fit]:not([data-print-plan]) {
+  --re-rack-detail-scale: clamp(.72, var(--re-rack-zoom, 1), 2.5);
+  --re-rack-cable-scale: var(--re-rack-fit-cable-scale, 1);
+  --re-rack-marker-clearance: 2px;
+  --re-rack-side-bay: min(var(--re-rack-extra-bay), 8%);
+  --re-rack-end-bay: min(calc(var(--re-rack-extra-bay) / 3), 3vw);
+  --re-rack-route-space-start: clamp(.45rem, 2%, .9rem);
+  --re-rack-route-space-end: clamp(1rem, 4%, 2rem);
+  min-width: 0;
+}
+
+.re-rack-board[data-fit]:not([data-print-plan])[data-routing-strategy="pcb"] {
+  --re-rack-route-space-start: clamp(1.35rem, 7%, 5rem);
+  --re-rack-route-space-end: clamp(1.8rem, 10%, 7.5rem);
+}
+
+.re-rack-board[data-fit]:not([data-print-plan])[data-rack-face="both"] {
+  grid-template-columns: minmax(0, 1fr) clamp(1.5rem, 9%, 4.25rem) minmax(0, 1fr);
+}
+
+.re-rack-board[data-fit]:not([data-print-plan])[data-routing-strategy="pcb"][data-rack-face="both"] {
+  grid-template-columns: minmax(0, 1fr) clamp(2rem, 12%, 6.75rem) minmax(0, 1fr);
 }
 
 .re-rack-board[data-trimmed] {
@@ -396,21 +488,14 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-board[data-print-plan] {
-  --re-rack-print-top: .75rem;
-  --re-rack-print-bottom: .75rem;
   min-width: 0;
   width: var(--re-rack-print-width);
   padding-inline: calc(.75rem + var(--re-rack-route-space-start) + var(--re-rack-print-bay))
     calc(.75rem + var(--re-rack-route-space-end) + var(--re-rack-print-bay));
-  padding-block: calc(var(--re-rack-print-top) + 28px) calc(var(--re-rack-print-bottom) + 28px);
+  padding-block: calc(var(--re-rack-route-top) + 28px) calc(var(--re-rack-route-bottom) + 28px);
 }
 
 .re-rack-board[data-print-plan][data-trimmed] { width: var(--re-rack-trim-width); }
-
-.re-rack-board[data-print-plan][data-routing-strategy="pcb"] {
-  --re-rack-print-top: 3.75rem;
-  --re-rack-print-bottom: 5.25rem;
-}
 
 .re-rack-board[data-trimmed] .re-rack-device {
   overflow-x: clip;
@@ -431,6 +516,11 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   text-transform: uppercase;
   text-align: center;
   margin: 0 0 .45rem;
+}
+
+.re-rack-board[data-fit]:not([data-print-plan]) .re-rack-face-heading {
+  font-size: clamp(10px, calc(12px * var(--re-rack-detail-scale)), 19px);
+  line-height: 1.35rem;
 }
 
 .re-rack-units {
@@ -466,7 +556,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   color: var(--tblr-secondary-color, #576479);
   background: var(--re-rack-bg);
   border-inline-end: 1px solid var(--re-rack-border);
-  font-size: .69rem;
+  font-size: clamp(8px, calc(.69rem * var(--re-rack-detail-scale)), 18px);
   font-weight: 600;
 }
 
@@ -501,7 +591,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   border-radius: .22rem;
   background: var(--re-rack-surface);
   color: var(--re-rack-text);
-  font: 650 .8rem/1 system-ui, sans-serif;
+  font: 650 clamp(10px, calc(.8rem * var(--re-rack-detail-scale)), 17px)/1 system-ui, sans-serif;
   cursor: pointer;
   pointer-events: auto;
   touch-action: manipulation;
@@ -552,8 +642,36 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   pointer-events: none;
 }
 
-.re-rack-board[data-image-mode="faded"] .re-rack-photo > img { opacity: .5; }
-.re-rack-board[data-image-mode="hidden"] .re-rack-photo > img { opacity: 0; }
+.re-rack-board[data-image-mode="faded"] :is(.re-rack-photo > img, .re-rack-module-image) { opacity: .5; }
+.re-rack-board[data-image-mode="hidden"] :is(.re-rack-photo > img, .re-rack-module-image) { opacity: 0; }
+.re-rack-photo > img[data-layout-image-hidden] { visibility: hidden; }
+
+.re-rack-artwork-item { position: absolute; pointer-events: none; }
+
+.re-rack-artwork-text {
+  color: #f1f5f9;
+  transform: translate(-50%, -50%);
+  line-height: 1.1;
+  white-space: pre;
+}
+
+.re-rack-artwork-bay {
+  outline: 1px solid #7589a1;
+  background: #172337;
+}
+
+.re-rack-artwork-bay .re-rack-module-image { object-fit: fill; }
+
+.re-rack-module-label {
+  position: absolute;
+  inset: auto .2rem .1rem;
+  overflow: hidden;
+  color: #d9e5f1;
+  font: 600 clamp(6px, calc(8px * var(--re-rack-detail-scale)), 16px)/1.2 system-ui, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px #101827, 0 0 3px #101827;
+}
 
 .re-rack-device-tools {
   position: absolute;
@@ -571,19 +689,19 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 .28rem;
-  font-size: .65rem;
-  line-height: 1rem;
+  font-size: clamp(8px, calc(.65rem * var(--re-rack-detail-scale)), 19px);
+  line-height: clamp(.75rem, calc(1rem * var(--re-rack-detail-scale)), 1.75rem);
   color: #fff;
 }
 
 .re-rack-cable-focus-button {
-  flex: 0 0 1.15rem;
+  flex: 0 0 clamp(.85rem, calc(1.15rem * var(--re-rack-detail-scale)), 1.9rem);
   padding: 0;
   border: 0;
   background: transparent;
   color: #c8d7e8;
-  font-size: .85rem;
-  line-height: 1rem;
+  font-size: clamp(10px, calc(.85rem * var(--re-rack-detail-scale)), 22px);
+  line-height: clamp(.75rem, calc(1rem * var(--re-rack-detail-scale)), 1.75rem);
   cursor: pointer;
 }
 
@@ -609,57 +727,57 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-port-marker {
   position: absolute;
   z-index: 4;
-  width: clamp(9px, calc(var(--re-rack-zoom, 1) * 10px), 17px);
-  height: clamp(9px, calc(var(--re-rack-zoom, 1) * 10px), 17px);
+  box-sizing: border-box;
+  container-type: size;
+  width: clamp(13px, calc(var(--re-rack-zoom, 1) * 13px), 24px);
+  height: clamp(11px, calc(var(--re-rack-zoom, 1) * 11px), 20px);
   min-height: 0;
   padding: 0;
   overflow: visible;
   transform: translate(-50%, -50%);
-  border: 1px solid #182538;
-  border-radius: 50%;
+  border: 0;
+  border-radius: 2px;
   background: var(--re-port-color);
-  box-shadow: 0 0 0 1px #fff;
+}
+
+.re-rack-board[data-fit]:not([data-print-plan]) .re-rack-port-marker {
+  width: clamp(9px, calc(13px * var(--re-rack-zoom, 1)), 42px);
+  height: clamp(8px, calc(11px * var(--re-rack-zoom, 1)), 35px);
+}
+
+.re-rack[data-port-fill="vlan"] .re-rack-port-marker {
+  background: var(--re-port-vlan-color, var(--re-rack-muted-port));
+}
+
+.re-rack-port-label-frame {
+  position: absolute;
+  inset: 0;
+  /* Size the stroke to the real port, including caps imposed by nearby ports. */
+  border: clamp(1px, 19cqmin, 3px) solid;
+  border-block-color: var(--re-port-stroke-block, var(--re-port-stroke));
+  border-inline-color: var(--re-port-stroke-inline, var(--re-port-stroke));
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px var(--re-rack-port-keyline),
+    inset 0 0 0 clamp(.5px, 5cqmin, 1px) var(--re-rack-port-keyline);
+  overflow: clip;
+  pointer-events: none;
 }
 
 .re-rack-port-label {
   position: absolute;
-  bottom: calc(100% + 3px);
+  top: 50%;
   left: 50%;
-  max-width: 9ch;
-  padding: 1px;
-  overflow: hidden;
+  width: max-content;
+  padding-inline: 1px;
   border-radius: 2px;
   background: #111c2eea;
   color: #fff;
-  font: 650 8px/1 system-ui, sans-serif;
+  font: 700 20px/normal system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-
-.re-rack-port-label-below {
-  top: calc(100% + 3px);
-  bottom: auto;
-}
-
-.re-rack-port-label-numeric { font-size: 7px; }
-
-[data-board][data-zoomed] .re-rack-port-label-numeric {
-  top: 50%;
-  bottom: auto;
-  max-width: none;
-  padding: 0;
-  background: transparent;
-  color: #0b1422;
-  font-size: 8.5px;
-  transform: translate(-50%, -50%);
-}
-
-[data-board][data-zoomed] .re-rack-port-label-numeric[data-digits="3"] {
-  font-size: 7px;
-  letter-spacing: -.2px;
+  text-align: center;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+  transform: translate(-50%, -50%) scale(var(--re-rack-port-label-scale, 0));
 }
 
 .re-rack-port-marker:hover,
@@ -682,11 +800,13 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 [data-interface-highlight-mode="used"]:not([data-device-cable-focus]) .re-rack-port:not([data-port-used], :hover, :focus-visible, .re-rack-end-highlight),
 .re-rack-port[data-unrelated-port] {
   --re-port-color: var(--re-rack-muted-port);
+  --re-port-stroke: var(--re-rack-muted-stroke);
 }
 
 .re-rack-port-marker.re-rack-vlan-match::before {
   position: absolute;
   inset: -3px;
+  border-radius: 4px;
 }
 
 .re-rack-device.re-rack-trace-device-highlight {
@@ -698,7 +818,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   position: absolute;
   inset: 1px -4px;
   border-inline: 2px solid var(--re-rack-trace-accent);
-  border-radius: 35%;
+  border-radius: 2px;
   content: "";
   pointer-events: none;
 }
@@ -749,17 +869,17 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-bundle-line {
   stroke: var(--re-rack-bundle-ink);
-  stroke-width: 4px;
+  stroke-width: calc(4px * var(--re-rack-cable-scale));
 }
 
 .re-rack-bundle-casing {
   stroke: var(--re-rack-surface);
-  stroke-width: 7px;
+  stroke-width: calc(7px * var(--re-rack-cable-scale));
 }
 
 .re-rack-bundle-hit {
   stroke: transparent;
-  stroke-width: 22px;
+  stroke-width: calc(22px * var(--re-rack-cable-scale));
 }
 
 .re-rack-bundle-anchor {
@@ -776,7 +896,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-bundle-count {
   fill: var(--re-rack-bundle-ink);
-  font-size: 11px;
+  font-size: calc(11px * var(--re-rack-cable-scale));
   font-weight: 700;
   text-anchor: middle;
   dominant-baseline: central;
@@ -799,14 +919,14 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-wire {
-  stroke-width: 2.5;
+  stroke-width: calc(2.5px * var(--re-rack-cable-scale));
   opacity: .62;
   pointer-events: none;
 }
 
 .re-rack-wire-contrast {
   display: none;
-  stroke-width: 4px;
+  stroke-width: calc(4px * var(--re-rack-cable-scale));
   opacity: .72;
   pointer-events: none;
 }
@@ -827,18 +947,18 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 [data-routing-strategy="pcb"] .re-rack-wire[data-wire-visual]:not(.re-rack-wire-selected, .re-rack-wire-focus-stub) {
-  stroke-width: 1.65px;
+  stroke-width: calc(1.65px * var(--re-rack-cable-scale));
 }
 
 [data-routing-strategy="pcb"] .re-rack-wire-contrast:has(+ [data-wire-visual]:not(.re-rack-wire-selected, .re-rack-wire-focus-stub)) {
-  stroke-width: 2.75px;
+  stroke-width: calc(2.75px * var(--re-rack-cable-scale));
 }
 
-.re-rack-wire-contrast:has(+ .re-rack-wire-selected) { stroke-width: 5px; }
-.re-rack-wire-contrast:has(+ .re-rack-wire-hovered) { stroke-width: 6px; }
+.re-rack-wire-contrast:has(+ .re-rack-wire-selected) { stroke-width: calc(5px * var(--re-rack-cable-scale)); }
+.re-rack-wire-contrast:has(+ .re-rack-wire-hovered) { stroke-width: calc(6px * var(--re-rack-cable-scale)); }
 
 .re-rack-wire-contrast:has(+ :is(.re-rack-wire-hover-stub, .re-rack-wire-selected-stub, .re-rack-wire-focus-stub)) {
-  stroke-width: 5px;
+  stroke-width: calc(5px * var(--re-rack-cable-scale));
   stroke-dasharray: 5 4;
 }
 
@@ -855,7 +975,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-wire-casing {
   stroke: var(--re-rack-surface);
-  stroke-width: 8;
+  stroke-width: calc(8px * var(--re-rack-cable-scale));
   filter: drop-shadow(0 0 1px var(--re-rack-text));
   pointer-events: none;
 }
@@ -866,12 +986,12 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-wire-selected,
 .re-rack-wire-preview {
-  stroke-width: 3.5;
+  stroke-width: calc(3.5px * var(--re-rack-cable-scale));
   opacity: 1;
 }
 
 .re-rack-wire-hovered {
-  stroke-width: 4.5;
+  stroke-width: calc(4.5px * var(--re-rack-cable-scale));
   opacity: 1;
 }
 
@@ -882,13 +1002,14 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-wire-hover-stub,
 .re-rack-wire-selected-stub,
 .re-rack-wire-focus-stub {
-  stroke-width: 3.5;
+  stroke-width: calc(3.5px * var(--re-rack-cable-scale));
   stroke-dasharray: 5 4;
   opacity: 1;
   pointer-events: none;
 }
 
 .re-rack-trace-continuation {
+  r: calc(4px * var(--re-rack-cable-scale));
   fill: var(--re-rack-surface);
   stroke: var(--re-rack-trace-accent);
   stroke-width: 1.8;
@@ -902,26 +1023,27 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-wire-trace-casing {
   stroke: var(--re-rack-surface);
-  stroke-width: 5.5;
+  stroke-width: calc(5.5px * var(--re-rack-cable-scale));
   opacity: .92;
   pointer-events: none;
 }
 
 .re-rack-wire-trace {
   stroke: var(--re-rack-trace-accent);
-  stroke-width: 2.75;
+  stroke-width: calc(2.75px * var(--re-rack-cable-scale));
   stroke-dasharray: 5 4;
   pointer-events: none;
 }
 
 .re-rack-wire-hit {
   stroke: transparent;
-  stroke-width: 12;
+  stroke-width: calc(12px * var(--re-rack-cable-scale));
   pointer-events: stroke;
   cursor: pointer;
 }
 
 .re-rack-wire-handle {
+  r: calc(9px * var(--re-rack-cable-scale));
   fill: transparent;
   pointer-events: all;
   cursor: grab;
@@ -931,6 +1053,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-wire-handle:active { cursor: grabbing; }
 
 .re-rack-wire-handle-visible {
+  r: calc(3.5px * var(--re-rack-cable-scale));
   stroke: var(--re-rack-surface);
   stroke-width: 2;
   opacity: .9;
@@ -1141,6 +1264,54 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-tooltip[data-compact] .re-rack-tooltip-target { padding: .36rem .45rem; }
 .re-rack-tooltip[data-compact] .re-rack-tooltip-device { font-size: .92rem; }
 
+.re-rack-tooltip-port-details {
+  min-width: 0;
+  padding: .4rem .55rem;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .35rem;
+}
+
+.re-rack-tooltip-port-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .1rem .45rem;
+  margin: 0 0 .25rem;
+}
+
+.re-rack-tooltip-port-title { font-size: .78rem; font-weight: 700; }
+.re-rack-tooltip-port-state { color: var(--re-rack-tooltip-muted); }
+
+.re-rack-tooltip-port-fields {
+  display: grid;
+  gap: .18rem .6rem;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+}
+
+.re-rack-tooltip-port-fields > div { display: contents; }
+
+.re-rack-tooltip-port-fields dt { color: var(--re-rack-tooltip-muted); font-weight: 500; }
+.re-rack-tooltip-port-fields dd { min-width: 0; margin: 0; }
+
+.re-rack-tooltip-vlan-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .16rem .24rem;
+}
+
+.re-rack-tooltip-vlan {
+  display: inline-block;
+  max-width: 100%;
+  padding: .03rem .27rem;
+  border: 1px solid var(--re-rack-border);
+  border-inline-start-color: var(--re-rack-tooltip-vlan-color, var(--re-rack-border));
+  border-radius: .24rem;
+  background: var(--re-rack-bg);
+  font-variant-numeric: tabular-nums;
+}
+
 .re-rack-trace {
   --re-rack-trace-muted: color-mix(in srgb, var(--re-rack-text) 75%, var(--re-rack-surface));
   display: grid;
@@ -1336,6 +1507,8 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-move-dialog { width: min(27rem, calc(100vw - 1.5rem)); }
 .re-rack-edit-dialog { width: min(29rem, calc(100vw - 1.5rem)); }
 .re-rack-details-dialog { width: min(42rem, calc(100vw - 1.5rem)); }
+.re-rack-port-dialog { width: min(35rem, calc(100vw - 1.5rem)); }
+.re-rack-vlan-color-dialog { box-sizing: border-box; }
 
 .re-rack-dialog::backdrop { background: #11182790; }
 
@@ -1356,6 +1529,44 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   overflow-wrap: anywhere;
 }
 
+.re-rack-vlan-color-rules {
+  display: grid;
+  gap: .55rem;
+  max-height: min(32vh, 18rem);
+  overflow-y: auto;
+}
+
+.re-rack-vlan-color-rules:empty { display: none; }
+
+.re-rack-vlan-color-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: .5rem;
+  padding: .5rem;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .35rem;
+  font-size: .78rem;
+}
+
+.re-rack-vlan-color-rule label { margin: 0; min-width: 0; }
+.re-rack-vlan-color-rule input { margin-top: .2rem; }
+.re-rack-vlan-color-picker { width: 2.7rem; min-width: 0; padding: .2rem; }
+.re-rack-vlan-color-add { justify-self: start; }
+
+.re-rack-vlan-color-fallback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .45rem;
+  margin-top: .3rem;
+  padding-top: .5rem;
+  border-top: 1px solid var(--re-rack-border);
+}
+
+.re-rack-vlan-color-fallback .form-check { margin: 0; }
+
 .re-rack-edit-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1369,6 +1580,106 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-edit-wide { grid-column: 1 / -1; }
+
+.re-rack-inline-form {
+  display: grid;
+  gap: .5rem;
+  min-width: 0;
+  padding: .7rem;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .45rem;
+  background: color-mix(in srgb, var(--re-rack-bg) 55%, var(--re-rack-surface));
+}
+
+.re-rack-inline-heading,
+.re-rack-inline-feedback,
+.re-rack-inline-tags,
+.re-rack-inline-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem .5rem;
+}
+
+.re-rack-inline-heading { justify-content: space-between; }
+
+.re-rack-inline-heading h3 {
+  margin: 0;
+  font-size: .9rem;
+  font-weight: 650;
+}
+
+.re-rack-inline-hint,
+.re-rack-inline-status {
+  margin: 0;
+  color: var(--tblr-secondary-color, #576479);
+  font-size: .75rem;
+}
+
+.re-rack-inline-status { font-weight: 600; }
+.re-rack-inline-feedback:has(> :not([hidden])) { padding-top: .3rem; }
+.re-rack-inline-feedback:not(:has(> :not([hidden]))) { display: none; }
+.re-rack-inline-feedback > p { flex: 1 1 13rem; margin: 0; }
+
+.re-rack-inline-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .5rem .75rem;
+}
+
+.re-rack-inline-fields .form-label { font-size: .78rem; }
+.re-rack-inline-fields textarea { min-height: 4rem; resize: vertical; }
+
+.re-rack-inline-length,
+.re-rack-inline-color {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(5.25rem, .75fr);
+  gap: .35rem;
+}
+
+.re-rack-inline-color { grid-template-columns: minmax(0, 8rem) 2.3rem minmax(0, 1fr); }
+.re-rack-inline-color input[type="color"] { min-width: 0; width: 100%; padding: .15rem; }
+.re-rack-inline-palette { grid-column: 1 / -1; gap: .25rem; margin: .05rem 0 0; }
+.re-rack-inline-palette .re-rack-palette-swatch { width: 1.45rem; height: 1.45rem; }
+.re-rack-inline-palette .re-rack-palette-swatch::before { width: .85rem; height: .85rem; }
+.re-rack-inline-palette .re-rack-palette-swatch[aria-pressed="true"] { outline: 2px solid var(--re-rack-target); }
+
+.re-rack-inline-tag-list { min-width: 0; gap: .28rem; }
+.re-rack-inline-tag-list:empty { display: none; }
+.re-rack-inline-tags select { width: min(100%, 10rem); }
+
+.re-rack-inline-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  max-width: 100%;
+  min-height: 1.45rem;
+  padding: .07rem .35rem;
+  border: 1px solid var(--re-rack-border);
+  border-inline-start: .25rem solid var(--re-rack-inline-tag-color, var(--re-rack-target));
+  border-radius: .28rem;
+  background: var(--re-rack-surface);
+  font-size: .76rem;
+  overflow-wrap: anywhere;
+}
+
+.re-rack-inline-tag button {
+  flex: none;
+  min-width: 1.25rem;
+  min-height: 1.25rem;
+  padding: 0 .15rem;
+  border: 0;
+  border-radius: .2rem;
+  background: transparent;
+  color: var(--re-rack-text);
+}
+
+.re-rack-inline-tag button:hover,
+.re-rack-inline-tag button:focus-visible { background: var(--re-rack-bg); }
+
+@media (max-width: 30rem) {
+  .re-rack-inline-fields { grid-template-columns: minmax(0, 1fr); }
+}
 
 .re-rack-history-list {
   display: grid;
@@ -1409,6 +1720,52 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-details-dialog .re-rack-dialog-details { gap: .8rem; }
+.re-rack-port-dialog .re-rack-dialog-details { gap: .7rem; }
+
+.re-rack-port-detail-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .4rem .75rem;
+}
+
+.re-rack-port-detail-heading > div {
+  display: grid;
+  gap: .18rem;
+  min-width: 0;
+}
+
+.re-rack-port-dialog .re-rack-detail-port-fields {
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
+  margin-top: 0;
+  font-size: .85rem;
+}
+
+.re-rack-port-connection {
+  display: grid;
+  gap: .3rem;
+  padding: .65rem .75rem;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .45rem;
+  background: var(--re-rack-bg);
+}
+
+.re-rack-port-connection-title,
+.re-rack-port-connection-peer,
+.re-rack-port-connection-destination { margin: 0; }
+
+.re-rack-port-connection-title { font-size: .78rem; }
+.re-rack-port-connection-peer { font-weight: 650; }
+.re-rack-port-connection-destination { display: grid; gap: .12rem; margin-block: .25rem; }
+
+.re-rack a.re-rack-detail-netbox-link {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: .14em;
+}
+
+.re-rack a.re-rack-detail-netbox-link:hover { text-decoration-color: currentColor; }
 
 .re-rack-detail-heading {
   display: flex;
@@ -1477,6 +1834,32 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   font-size: .78rem;
 }
 
+.re-rack-detail-port-fields {
+  display: grid;
+  grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: .3rem .55rem;
+  margin: .35rem 0 0;
+  padding-top: .55rem;
+  border-top: 1px solid var(--re-rack-border);
+  font-size: .78rem;
+}
+
+.re-rack-detail-port-fields dt {
+  color: color-mix(in srgb, var(--re-rack-text) 75%, var(--re-rack-surface));
+  font-weight: 600;
+}
+
+.re-rack-detail-port-fields dd { min-width: 0; margin: 0; }
+.re-rack-detail-port-fields dd:last-child { white-space: pre-wrap; }
+
+.re-rack-detail-vlan-disclosure > summary {
+  color: var(--tblr-primary, #0054a6);
+  cursor: pointer;
+}
+
+.re-rack-detail-vlan-disclosure > div { margin-top: .3rem; }
+
 .re-rack-detail-locate,
 .re-rack-detail-endpoint > button {
   justify-self: start;
@@ -1488,6 +1871,8 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-detail-connector {
   display: grid;
   place-items: center;
+  align-self: start;
+  margin-top: 4.7rem;
 }
 
 .re-rack-detail-connector::before {
@@ -1554,6 +1939,8 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto 1.5rem auto;
   }
+
+  .re-rack-detail-connector { align-self: stretch; margin-top: 0; }
 
   .re-rack-detail-connector::before {
     width: .34rem;
@@ -1882,4 +2269,15 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   .re-rack-workspace { grid-template-columns: minmax(0, 1fr); }
   .re-rack-scroll { max-height: 58vh; }
   .re-rack-inspector-scroll { max-height: 52vh; }
+}
+
+@media (max-width: 38rem) {
+  .re-rack-toolbar-controls { position: relative; gap: .24rem .4rem; }
+  .re-rack-toolbar .btn-sm { padding-inline: .3rem; }
+  .re-rack-toolbar .re-rack-icon-button { min-width: 1.5rem; }
+  .re-rack-vlan-filter [data-vlan-query] { width: 4.25rem; }
+  .re-rack-vlan-filter [data-vlan-kind] { width: 5.75rem; padding-inline-start: .4rem; }
+  .re-rack-filter-controls,
+  .re-rack-device-filter { position: static; }
+  .re-rack-filter-controls { gap: .24rem; }
 }

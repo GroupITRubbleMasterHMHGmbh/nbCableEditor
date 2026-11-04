@@ -1,20 +1,21 @@
 {% extends 'base/layout.html' %}
 {% load static %}
 
-{% block title %}Port layout · {{ device_type }}{% endblock %}
+{% block title %}Layout · {{ layout_owner|default:device_type }}{% endblock %}
 
 {% block head %}
   {{ block.super }}
+  <link rel="stylesheet" href="{% static 'netbox_rack_editor/artwork.css' %}?v={{ editor_version }}">
   <link rel="stylesheet" href="{% static 'netbox_rack_editor/layout.css' %}?v={{ editor_version }}">
 {% endblock %}
 
 {% block content %}
-  <div id="nre-layout" class="nre-layout" data-save-url="{{ save_url }}">
+  <div id="nre-layout" class="nre-layout" lang="en" data-save-url="{{ save_url }}">
     <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
       <div>
-        <div class="text-secondary">Device type · <a href="{{ device_type.get_absolute_url }}">{{ device_type }}</a></div>
-        <h1 class="mb-1">Port layout</h1>
-        <p class="text-secondary mb-0">Place ports once for this device type. All matching devices use these positions in the rack editor.</p>
+        <div class="text-secondary">{{ layout_kind_label|default:"Device type" }} · <a href="{{ layout_owner.get_absolute_url|default:device_type.get_absolute_url }}">{{ layout_owner|default:device_type }}</a></div>
+        <h1 class="mb-1">{% if is_module_type %}Module layout{% else %}Device layout{% endif %}</h1>
+        <p class="text-secondary mb-0">Arrange ports and draw the front or rear face. The rack editor uses this layout for matching {% if is_module_type %}modules{% else %}devices{% endif %}.</p>
       </div>
       {% if layout_data.canEdit %}
         <button type="button" class="btn btn-primary" data-save disabled>Save layout</button>
@@ -24,63 +25,258 @@
 
     <div class="card mb-3">
       <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <div class="btn-group" role="group" aria-label="Device face">
+        <div class="btn-group" role="group" aria-label="Layout face">
           <button type="button" class="btn btn-outline-primary active" data-face="front" aria-pressed="true">Front</button>
           <button type="button" class="btn btn-outline-primary" data-face="rear" aria-pressed="false">Rear</button>
         </div>
         <div class="d-flex flex-wrap align-items-center gap-3">
+          <label class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" data-use-image checked{% if not layout_data.canEdit %} disabled{% endif %}>
+            <span class="form-check-label">Use type image</span>
+          </label>
           <label class="form-check mb-0">
             <input class="form-check-input" type="checkbox" data-show-port-numbers checked{% if not layout_data.ports %} disabled{% endif %}>
-            <span class="form-check-label">Show port numbers</span>
+            <span class="form-check-label">Show port labels</span>
           </label>
           <span class="text-secondary" data-count></span>
         </div>
       </div>
       <div class="card-body">
-        {% if layout_data.canEdit and layout_data.ports %}
-          <div class="nre-layout-controls mb-3" data-controls>
-            <label class="form-label mb-0">First port
-              <select class="form-select no-ts mt-1" data-first></select>
-            </label>
-            <label class="form-label mb-0">Last port
-              <select class="form-select no-ts mt-1" data-last></select>
-            </label>
-            <label class="form-label mb-0">Columns
-              <input class="form-control mt-1" type="number" data-columns min="1" step="1">
-            </label>
-            <label class="form-label mb-0">Numbering
-              <select class="form-select no-ts mt-1" data-order>
-                <option value="rows">Across rows</option>
-                <option value="columns">Down columns</option>
-              </select>
-            </label>
-            <button class="btn btn-outline-secondary" type="button" data-place>Place centered</button>
+        <div class="nre-layout-controls mb-3" data-controls{% if not layout_data.canEdit %} hidden{% endif %}>
+          <div class="nre-layout-commandbar" role="group" aria-label="Layout editor tools">
+            <div class="nre-layout-toolset" role="group" aria-label="Drawing mode">
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-tool-choice="select" aria-pressed="true"
+                      aria-keyshortcuts="V" title="Select (V)"><i class="mdi mdi-cursor-default-outline" aria-hidden="true"></i> Select</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-tool-choice="grid" aria-pressed="false"
+                      aria-keyshortcuts="G" title="Place a port grid (G)"><i class="mdi mdi-grid" aria-hidden="true"></i> Port grid</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-tool-choice="port" aria-pressed="false"
+                      aria-keyshortcuts="P" title="Place a single port (P)"><i class="mdi mdi-ethernet" aria-hidden="true"></i> Single port</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-tool-choice="text" aria-pressed="false"
+                      aria-keyshortcuts="T" title="Place text (T)"><i class="mdi mdi-format-text" aria-hidden="true"></i> Text</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-tool-choice="rectangle" aria-pressed="false"
+                      aria-keyshortcuts="R" title="Draw a rectangle (R)"><i class="mdi mdi-rectangle-outline" aria-hidden="true"></i> Rectangle</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-tool-choice="bay" aria-pressed="false"
+                      {% if layout_data.bays %}aria-keyshortcuts="M" title="Draw a module bay (M)"{% else %}disabled title="Add a module bay template first"{% endif %}>
+                <i class="mdi mdi-expansion-card" aria-hidden="true"></i> Module bay
+              </button>
+            </div>
+            <div class="nre-layout-command-actions">
+              <div class="btn-group nre-layout-history" role="group" aria-label="Drawing history">
+                <button class="btn btn-sm btn-outline-secondary" type="button" data-undo disabled
+                        aria-label="Undo" aria-keyshortcuts="Control+Z Meta+Z" title="Undo (Ctrl/⌘+Z)">
+                  <i class="mdi mdi-undo" aria-hidden="true"></i><span>Undo</span>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" type="button" data-redo disabled
+                        aria-label="Redo" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y Meta+Y" title="Redo (Ctrl/⌘+Shift+Z)">
+                  <i class="mdi mdi-redo" aria-hidden="true"></i><span>Redo</span>
+                </button>
+              </div>
+              <div class="nre-layout-snap-settings" role="group" aria-label="Snapping">
+                <span class="nre-layout-snap-heading">Snap</span>
+                <label class="nre-layout-snap-toggle" title="Snap to the grid. Hold Alt to temporarily bypass snapping.">
+                  <input class="form-check-input m-0" type="checkbox" data-snap-grid aria-label="Snap to grid"> Grid
+                </label>
+                <select class="form-select form-select-sm no-ts" data-grid-step aria-label="Snap grid spacing" title="Grid spacing at 1000 px canvas width">
+                  <option value="5">5 px</option>
+                  <option value="10" selected>10 px</option>
+                  <option value="20">20 px</option>
+                  <option value="40">40 px</option>
+                </select>
+                <label class="nre-layout-snap-toggle" title="Snap to nearby ports and drawing objects. Hold Alt to temporarily bypass snapping.">
+                  <input class="form-check-input m-0" type="checkbox" data-snap-objects aria-label="Snap to objects"> Objects
+                </label>
+              </div>
+            </div>
           </div>
-          <p class="small text-secondary mb-3" data-hint>
-            Choose a range, then drag a rectangle on the image to space the ports evenly.
-            Drag a marker to adjust it, or hold Shift while dragging to draw over existing markers.
-            Use arrow keys on a marker for small moves, or Delete to remove it.
-          </p>
-          <p class="text-secondary mb-3" data-empty-face hidden>No port templates can be placed on this face.</p>
-        {% elif not layout_data.ports %}
-          <p class="text-secondary mb-3">No interface, front port or rear port templates are visible for this device type.</p>
-        {% else %}
+          <p class="nre-layout-tool-hint small text-secondary mb-0" data-hint>Drag to select ports or hold Ctrl/⌘ and click individual ports.</p>
+          <div data-tool-fields="grid" hidden>
+            <div class="nre-layout-grid-fields">
+              <label class="form-label mb-0">First port
+                <select class="form-select no-ts mt-1" data-first></select>
+              </label>
+              <label class="form-label mb-0">Last port
+                <select class="form-select no-ts mt-1" data-last></select>
+              </label>
+              <label class="form-label mb-0">Columns
+                <input class="form-control mt-1" type="number" data-columns min="1" step="1" placeholder="Auto">
+              </label>
+              <label class="form-label mb-0">Rows
+                <input class="form-control mt-1" type="number" data-rows min="1" step="1" placeholder="Auto">
+              </label>
+              <button class="btn btn-outline-secondary" type="button" data-place>Place centered</button>
+            </div>
+            <div class="nre-layout-numbering-fields">
+              <label class="form-label mb-0">Port order
+                <select class="form-select no-ts mt-1" data-order>
+                  <option value="rows">Across rows</option>
+                  <option value="rows-reverse">Across rows, right to left</option>
+                  <option value="columns">Down columns</option>
+                  <option value="columns-reverse">Down columns, right to left</option>
+                </select>
+              </label>
+              <label class="form-label mb-0">Port labels
+                <select class="form-select no-ts mt-1" data-grid-numbering>
+                  <option value="auto">Keep existing labels</option>
+                  <option value="reset">Automatic</option>
+                  <option value="sequence">Numbered sequence</option>
+                  <option value="name">Port names</option>
+                </select>
+              </label>
+              <label class="form-label mb-0">Start number
+                <input class="form-control mt-1" type="number" data-number-start step="1" value="1">
+              </label>
+              <label class="form-label mb-0">Step
+                <input class="form-control mt-1" type="number" data-number-step step="1" value="1">
+              </label>
+              <label class="form-label mb-0">Label prefix
+                <input class="form-control mt-1" type="text" data-label-prefix maxlength="32" placeholder="e.g. P">
+              </label>
+            </div>
+          </div>
+          <div class="nre-layout-single-fields" data-tool-fields="port" hidden>
+            <label class="form-label mb-0">Port to place
+              <select class="form-select no-ts mt-1" data-single-port></select>
+            </label>
+            <span class="small text-secondary">Click the drawing where this port should go.</span>
+          </div>
+          <div class="nre-layout-object-fields" data-object-fields hidden>
+            <div class="nre-layout-text-fields" data-object-text-fields hidden>
+              <label class="form-label mb-0">Text
+                <textarea class="form-control mt-1" data-object-text rows="2" maxlength="256"
+                          aria-describedby="nre-layout-placeholders" placeholder="{device.name}"></textarea>
+              </label>
+              <label class="form-label mb-0">Font
+                <select class="form-select no-ts mt-1" data-object-font>
+                  <option value="sans-serif">Sans serif</option>
+                  <option value="serif">Serif</option>
+                  <option value="monospace">Monospace</option>
+                </select>
+              </label>
+              <label class="form-label mb-0">Font size (px)
+                <input class="form-control mt-1" type="number" data-object-size min="8" max="96" step="1" value="16">
+              </label>
+            </div>
+            <label class="form-label mb-0 nre-layout-color-field" data-object-color-field hidden>Color
+              <input class="form-control form-control-color mt-1" type="color" data-object-color value="#e2e8f0">
+            </label>
+            <div class="nre-layout-rectangle-fields" data-rectangle-fields hidden>
+              <label class="form-label mb-0 nre-layout-color-field">Border color
+                <input class="form-control form-control-color mt-1" type="color" data-rectangle-border-color value="#a8bacb">
+              </label>
+              <label class="form-check form-switch mb-0 nre-layout-rectangle-fill">
+                <input class="form-check-input" type="checkbox" data-rectangle-fill>
+                <span class="form-check-label">Fill</span>
+              </label>
+              <label class="form-label mb-0 nre-layout-color-field" data-rectangle-fill-field hidden>Fill color
+                <input class="form-control form-control-color mt-1" type="color" data-rectangle-fill-color value="#43566b">
+              </label>
+              <label class="form-label mb-0 nre-layout-rectangle-label-input">Label
+                <input class="form-control mt-1" type="text" data-rectangle-label maxlength="256"
+                       aria-describedby="nre-layout-placeholders" placeholder="Optional, e.g. {device.name}">
+              </label>
+              <div class="nre-layout-rectangle-label-fields" data-rectangle-label-fields hidden>
+                <label class="form-label mb-0">Position
+                  <select class="form-select no-ts mt-1" data-rectangle-label-position>
+                    <option value="center">Center</option>
+                    <option value="top-left">Top left</option>
+                    <option value="top">Top center</option>
+                    <option value="top-right">Top right</option>
+                    <option value="bottom-left">Bottom left</option>
+                    <option value="bottom">Bottom center</option>
+                    <option value="bottom-right">Bottom right</option>
+                    <option value="left">Left center (vertical)</option>
+                    <option value="right">Right center (vertical)</option>
+                  </select>
+                </label>
+                <label class="form-label mb-0">Font
+                  <select class="form-select no-ts mt-1" data-rectangle-label-font>
+                    <option value="sans-serif">Sans serif</option>
+                    <option value="serif">Serif</option>
+                    <option value="monospace">Monospace</option>
+                  </select>
+                </label>
+                <label class="form-label mb-0">Font size (px)
+                  <input class="form-control mt-1" type="number" data-rectangle-label-size min="8" max="96" step="1" value="16">
+                </label>
+                <label class="form-label mb-0 nre-layout-color-field">Label color
+                  <input class="form-control form-control-color mt-1" type="color" data-rectangle-label-color value="#e2e8f0">
+                </label>
+              </div>
+            </div>
+            <div class="nre-layout-bay-fields" data-object-bay-field hidden>
+              <label class="form-label mb-0">Module bay
+                <select class="form-select no-ts mt-1" data-object-bay></select>
+              </label>
+              <label class="form-label mb-0">Module face
+                <select class="form-select no-ts mt-1" data-object-module-face>
+                  <option value="front">Front</option>
+                  <option value="rear">Rear</option>
+                </select>
+              </label>
+            </div>
+            <div class="nre-layout-field-insert" data-placeholder-controls hidden>
+              <label class="form-label mb-0" for="nre-layout-placeholder-field">Field</label>
+              <select class="form-select form-select-sm no-ts" id="nre-layout-placeholder-field" data-placeholder-select
+                      aria-describedby="nre-layout-placeholders">
+                <option value="">Choose a field…</option>
+              </select>
+              <button class="btn btn-sm btn-outline-secondary" type="button" data-placeholder-insert disabled>Insert</button>
+              <code data-placeholder-token hidden></code>
+              <p id="nre-layout-placeholders" class="small text-secondary mb-0">Fields show example values here and live values in the rack.</p>
+            </div>
+          </div>
+          <p class="small text-secondary mb-0" data-empty-face hidden>No port templates can be placed on this face. Text and rectangles can still be added.</p>
+        </div>
+        {% if not layout_data.canEdit %}
           <p class="text-secondary mb-3">You can view this layout with your current permissions.</p>
         {% endif %}
         <div class="nre-layout-image-scroll">
-          <div class="nre-layout-stage" data-stage role="group" aria-label="Front layout">
+          <div class="nre-layout-stage" data-stage data-active-tool="select" role="group" tabindex="-1" aria-label="Front layout">
             <img class="nre-layout-image" data-image alt="" draggable="false" hidden>
-            <div class="nre-layout-placeholder" data-placeholder>No image for this face</div>
+            <div class="nre-layout-placeholder" data-placeholder></div>
+            <div class="nre-layout-snap-grid" aria-hidden="true"></div>
+            <div class="nre-layout-design-items" data-design-items></div>
+            <div class="nre-layout-snap-guides" aria-hidden="true">
+              <div class="nre-layout-snap-guide-x" data-snap-guide-x hidden></div>
+              <div class="nre-layout-snap-guide-y" data-snap-guide-y hidden></div>
+            </div>
             <div class="nre-layout-markers" data-markers></div>
             <div class="nre-layout-preview" data-preview aria-hidden="true" hidden>
               <div class="nre-layout-box" data-box></div>
             </div>
           </div>
         </div>
-        <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
-          <span class="text-secondary" data-selected>Select a marker to see its port.</span>
+        <div class="nre-layout-inspector mt-3">
+          <span class="text-secondary" data-selected aria-live="polite">Select ports or artwork.</span>
+          <div class="nre-layout-align-toolbar" data-align-toolbar role="group" aria-label="Align selected ports" hidden>
+            <span class="nre-layout-align-heading">Align</span>
+            <div class="btn-group" role="group" aria-label="Align in a line">
+              <button class="btn btn-sm btn-outline-secondary" type="button" data-align="row" title="Align horizontally">
+                <i class="mdi mdi-align-vertical-center" aria-hidden="true"></i> Horizontal
+              </button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" data-align="column" title="Align vertically">
+                <i class="mdi mdi-align-horizontal-center" aria-hidden="true"></i> Vertical
+              </button>
+            </div>
+            <div class="nre-layout-align-grid">
+              <label class="small text-secondary mb-0" for="nre-layout-align-columns">Columns</label>
+              <input class="form-control form-control-sm" type="number" id="nre-layout-align-columns" data-align-columns
+                     min="1" max="256" step="1" placeholder="Auto">
+              <button class="btn btn-sm btn-outline-secondary" type="button" data-align="grid" title="Arrange as an evenly spaced grid">
+                <i class="mdi mdi-grid" aria-hidden="true"></i> Grid
+              </button>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-clear-selection title="Clear selection (Esc)">Clear selection</button>
+          </div>
           {% if layout_data.canEdit %}
-            <button class="btn btn-sm btn-outline-danger" type="button" data-remove hidden>Remove position</button>
+            <div class="nre-layout-port-label-fields" data-port-label-fields hidden>
+              <label class="form-label mb-0">Displayed port label
+                <input class="form-control form-control-sm mt-1" type="text" data-port-label maxlength="64" placeholder="Automatic">
+              </label>
+              <button class="btn btn-sm btn-outline-secondary" type="button" data-apply-port-label>Apply label</button>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-new-item hidden>Place another</button>
+            <button class="btn btn-sm btn-outline-danger" type="button" data-remove hidden>Remove selected</button>
           {% endif %}
         </div>
       </div>
@@ -93,5 +289,6 @@
 
 {% block javascript %}
   {{ block.super }}
+  <script src="{% static 'netbox_rack_editor/layout-geometry.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/layout.js' %}?v={{ editor_version }}" defer></script>
 {% endblock %}

@@ -42,10 +42,13 @@
   }
 
   function rackStyles(document) {
-    const sheet = Array.from(document.styleSheets).find(({href}) =>
-      href && new URL(href).pathname.endsWith("/netbox_rack_editor/rack.css"));
-    if (!sheet) throw new Error("The rack stylesheet is unavailable.");
-    return Array.from(sheet.cssRules, rule => rule.cssText).join("\n") + exportStyles;
+    const sheets = Array.from(document.styleSheets);
+    const stylesheet = name => sheets.find(({href}) =>
+      href && new URL(href).pathname.endsWith("/netbox_rack_editor/" + name + ".css"));
+    const rack = stylesheet("rack");
+    if (!rack) throw new Error("The rack stylesheet is unavailable.");
+    return [stylesheet("artwork"), rack].filter(Boolean)
+      .flatMap(sheet => Array.from(sheet.cssRules, rule => rule.cssText)).join("\n") + exportStyles;
   }
 
   async function snapshot(board, decorate) {
@@ -57,7 +60,7 @@
     const source = board.closest(".re-rack");
     const wrapper = document.createElementNS(HTML, "div");
     wrapper.className = "re-rack";
-    for (const attribute of ["data-device-cable-focus", "data-interface-highlight-mode"]) {
+    for (const attribute of ["data-device-cable-focus", "data-interface-highlight-mode", "data-port-fill"]) {
       if (source.hasAttribute(attribute)) wrapper.setAttribute(attribute, source.getAttribute(attribute));
     }
     for (const key of Array.from(css)) {
@@ -89,7 +92,7 @@
       const copy = copiedImages[index];
       const url = image.currentSrc || image.src;
       copy.removeAttribute("src");
-      if (!url || drawing.dataset.imageMode === "hidden" || !image.naturalWidth) {
+      if (!url || drawing.dataset.imageMode === "hidden" || copy.hasAttribute("data-layout-image-hidden") || !image.naturalWidth) {
         copy.remove();
         return null;
       }

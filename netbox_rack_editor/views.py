@@ -5,27 +5,41 @@ from collections import defaultdict
 from core.models import ObjectType
 from dcim.constants import NONCONNECTABLE_IFACE_TYPES
 from dcim.models import (
-    Cable, Device, DeviceType, FrontPort, FrontPortTemplate, Interface, InterfaceTemplate, Rack,
-    RearPort, RearPortTemplate,
+    Cable, Device, DeviceType, FrontPort, FrontPortTemplate, Interface, InterfaceTemplate,
+    ModuleBayTemplate, ModuleType, Rack, RearPort, RearPortTemplate,
 )
 from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Prefetch, Q, prefetch_related_objects
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
+from django.utils.translation import override
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_GET, require_POST
-from extras.models import Bookmark, JournalEntry, Subscription
+from extras.models import Bookmark, ImageAttachment, JournalEntry, Subscription
 from ipam.models import VLAN
 
 from . import RackEditorConfig
 from .cable_history import history_for_rack
-from .cable_views import is_simple_cable, port_key, port_unavailable
+from .cable_views import cable_details, is_simple_cable, port_key, port_unavailable
+from .layout_placeholders import layout_placeholder_fields
+from .metadata_tags import available_tags, tag_data
 from .models import LayoutRevision, PortPlacement
-from .rack_traces import PORT_KINDS, endpoint_data, native_path, readable_nodes, trace_payload
+from .rack_layouts import rack_layouts
+from .rack_traces import PORT_KINDS, endpoint_data, native_path, port_metadata, readable_nodes, trace_payload
 
 
 MAX_LAYOUT_BYTES = 512 * 1024
+MAX_DESIGN_ITEMS_PER_FACE = 256
+LAYOUT_FACES = ("front", "rear")
+LAYOUT_TYPES = {
+    "device": (DeviceType, "device_type", "Device type", "placements"),
+    "module": (ModuleType, "module_type", "Module type", "module-placements"),
+}
+LAYOUT_FONTS = ("sans-serif", "serif", "monospace")
+LAYOUT_LABEL_POSITIONS = (
+    "top-left", "top", "top-right", "bottom-left", "bottom", "bottom-right", "left", "right", "center",
+)
 LAYOUT_PORTS = {
     "interface": (InterfaceTemplate, "interface_template_id", None),
     "front-port": (FrontPortTemplate, "front_port_template_id", "front"),
@@ -56,23 +70,78 @@ def _route(name, pk):
     return reverse(f"plugins:netbox_rack_editor:{name}", args=[pk])
 
 
-def _images(device_type):
+def _module_images(user, module_type_ids):
+    images = {pk: {"frontImage": None, "rearImage": None} for pk in module_type_ids}
+    attachments = ImageAttachment.objects.restrict(user).filter(
+        object_type__app_label="dcim", object_type__model="moduletype", object_id__in=images,
+    ).filter(Q(name__iexact="front") | Q(name__iexact="rear")).only("object_id", "name", "image").order_by("pk")
+    for attachment in attachments:
+        key = attachment.name.lower() + "Image"
+        if attachment.image and images[attachment.object_id][key] is None:
+            images[attachment.object_id][key] = attachment.image.url
+    return images
+
+
+def _images(layout_owner, user=None):
+    if isinstance(layout_owner, ModuleType):
+        if user is not None:
+            return _module_images(user, [layout_owner.pk])[layout_owner.pk]
+        return {"frontImage": None, "rearImage": None}
     return {
-        "frontImage": device_type.front_image.url if device_type.front_image else None,
-        "rearImage": device_type.rear_image.url if device_type.rear_image else None,
+        "frontImage": layout_owner.front_image.url if layout_owner.front_image else None,
+        "rearImage": layout_owner.rear_image.url if layout_owner.rear_image else None,
     }
 
 
-def _layout_ports(user, device_type):
+def _layout_ports(user, owner_filter):
     ports = {}
     for kind, (model, _, fixed_face) in LAYOUT_PORTS.items():
-        templates = model.objects.restrict(user).filter(device_type=device_type)
+        templates = model.objects.restrict(user).filter(**owner_filter)
         if kind == "interface":
             templates = templates.exclude(type__in=NONCONNECTABLE_IFACE_TYPES)
         for pk, name, label in templates.order_by("name", "pk").values_list("pk", "name", "label"):
             key = pk if kind == "interface" else f"{kind}:{pk}"
             ports[key] = {"id": key, "name": name, "label": label, "kind": kind, "fixedFace": fixed_face}
     return ports
+
+
+def _layout_bays(user, owner_filter):
+    return dict(
+        ModuleBayTemplate.objects.restrict(user).filter(**owner_filter).order_by("name", "pk").values_list("pk", "name")
+    )
+
+
+def _visible_layout_design(design, bay_ids):
+    return {
+        face: {
+            "useImage": options["useImage"],
+            "items": [item for item in options["items"] if item["kind"] != "bay" or item["bay"] in bay_ids],
+        }
+        for face, options in design.items()
+    }
+
+
+def layout_designs(user, device_type_ids, module_type_ids):
+    device_types = DeviceType.objects.restrict(user).filter(pk__in=device_type_ids).values("pk")
+    module_types = ModuleType.objects.restrict(user).filter(pk__in=module_type_ids).values("pk")
+    matches = Q(device_type_id__in=device_types) | Q(module_type_id__in=module_types)
+    bays = defaultdict(set)
+    for pk, device_id, module_id in ModuleBayTemplate.objects.restrict(user).filter(matches).values_list(
+        "pk", "device_type_id", "module_type_id",
+    ):
+        bays[(device_id, module_id)].add(pk)
+    device_designs, module_designs = {}, {}
+    for device_id, module_id, design in LayoutRevision.objects.filter(matches).values_list(
+        "device_type_id", "module_type_id", "design",
+    ):
+        if not design:
+            continue
+        visible = _visible_layout_design(design, bays[(device_id, module_id)])
+        if device_id is not None:
+            device_designs[device_id] = visible
+        else:
+            module_designs[module_id] = visible
+    return device_designs, module_designs
 
 
 def _layout_port_identity(key):
@@ -100,42 +169,47 @@ def _placement_data(placement):
     for kind, (_, field, _) in LAYOUT_PORTS.items():
         if (pk := getattr(placement, field)) is not None:
             key = pk if kind == "interface" else f"{kind}:{pk}"
-            return {"port_id": key, "face": placement.face, "x": placement.x, "y": placement.y}
+            point = {"port_id": key, "face": placement.face, "x": placement.x, "y": placement.y}
+            if placement.label:
+                point["label"] = placement.label
+            return point
 
 
-def _can_edit_layout(user, device_type):
+def _can_edit_layout(user, owner):
     return (
         user.is_authenticated
-        and DeviceType.objects.restrict(user, "change").filter(pk=device_type.pk).exists()
-    )
-
-
-def _layout_revision(device_type_id):
-    return (
-        LayoutRevision.objects.filter(device_type_id=device_type_id)
-        .values_list("revision", flat=True)
-        .first()
-        or 0
+        and type(owner).objects.restrict(user, "change").filter(pk=owner.pk).exists()
     )
 
 
 @require_GET
-def layout_editor(request, pk):
-    device_type = get_object_or_404(DeviceType.objects.restrict(request.user), pk=pk)
-    revision = _layout_revision(pk)
-    ports = _layout_ports(request.user, device_type)
+def layout_editor(request, pk, kind="device"):
+    model, field, label, save_route = LAYOUT_TYPES[kind]
+    owner = get_object_or_404(model.objects.restrict(request.user), pk=pk)
+    owner_filter = {field: owner}
+    layout = LayoutRevision.objects.filter(**owner_filter).first()
+    ports = _layout_ports(request.user, owner_filter)
+    bays = _layout_bays(request.user, owner_filter)
     placements = [_placement_data(placement) for placement in _layout_placements(ports)]
     return render(request, "netbox_rack_editor/layout.html", {
-        "device_type": device_type,
+        "device_type": owner,
+        "layout_owner": owner,
+        "layout_kind_label": label,
+        "is_module_type": kind == "module",
         "editor_version": RackEditorConfig.version,
         "layout_data": {
-            **_images(device_type),
+            **_images(owner, request.user),
+            "layoutKind": kind,
+            "layoutName": str(owner),
+            "placeholderFields": layout_placeholder_fields(owner),
+            "bays": [{"id": bay_id, "name": name} for bay_id, name in bays.items()],
+            "design": _visible_layout_design(layout.design, bays) if layout else {},
             "ports": list(ports.values()),
             "placements": placements,
-            "canEdit": _can_edit_layout(request.user, device_type),
-            "revision": revision,
+            "canEdit": _can_edit_layout(request.user, owner),
+            "revision": layout.revision if layout else 0,
         },
-        "save_url": _route("placements", pk),
+        "save_url": _route(save_route, pk),
     })
 
 
@@ -158,55 +232,158 @@ def _parse_layout(raw):
         identity = _layout_port_identity(port_id)
         if identity is None or port_id in placements:
             raise ValueError("Each port must appear at most once and have a valid ID.")
-        if face not in ("front", "rear") or not all(type(n) in (int, float) and 0 <= n <= 1 for n in (x, y)):
+        if face not in LAYOUT_FACES or not all(type(n) in (int, float) and 0 <= n <= 1 for n in (x, y)):
             raise ValueError("Choose a front or rear face and coordinates between 0 and 1.")
         kind, pk = identity
         _, field, fixed_face = LAYOUT_PORTS[kind]
         if fixed_face and face != fixed_face:
             raise ValueError("Front and rear ports must stay on their corresponding device face.")
-        placements[port_id] = PortPlacement(**{field: pk}, face=face, x=x, y=y)
-    return body["revision"], placements
+        label = point.get("label", "")
+        if not isinstance(label, str) or len(label) > 64 or "\x00" in label:
+            raise ValueError("A port label must contain at most 64 characters.")
+        label.encode("utf-8")
+        placements[port_id] = PortPlacement(**{field: pk}, face=face, x=x, y=y, label=label)
+    return body["revision"], placements, _parse_layout_design(body["design"]) if "design" in body else None
+
+
+def _parse_layout_design(design):
+    if not isinstance(design, dict) or design.keys() - set(LAYOUT_FACES):
+        raise ValueError("Designs can contain a front and a rear face.")
+    validated = {}
+    for face, options in design.items():
+        if not isinstance(options, dict) or type(options.get("useImage")) is not bool:
+            raise ValueError("Choose whether to use the image for each face.")
+        items = options.get("items")
+        if not isinstance(items, list) or len(items) > MAX_DESIGN_ITEMS_PER_FACE:
+            raise ValueError(f"Each face can contain up to {MAX_DESIGN_ITEMS_PER_FACE} design objects.")
+        clean_items = []
+        bays = set()
+        for item in items:
+            clean = _parse_design_item(item)
+            if clean["kind"] == "bay":
+                if clean["bay"] in bays:
+                    raise ValueError("A module bay may be drawn only once per face.")
+                bays.add(clean["bay"])
+            clean_items.append(clean)
+        validated[face] = {"useImage": options["useImage"], "items": clean_items}
+    return validated
+
+
+def _parse_design_color(value):
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        raise ValueError("Use a six-digit hex color such as #FFFFFF.")
+    return value.upper()
+
+
+def _parse_design_text(item):
+    text, font, size = (item.get(key) for key in ("text", "font", "size"))
+    if not isinstance(text, str) or not text.strip() or len(text) > 256 or "\x00" in text:
+        raise ValueError("Enter text with at most 256 characters.")
+    text.encode("utf-8")
+    if font not in LAYOUT_FONTS or type(size) not in (int, float) or not 8 <= size <= 96:
+        raise ValueError("Choose a supported font and a size from 8 to 96.")
+    return {"text": text, "font": font, "size": size}
+
+
+def _parse_rectangle_label(label):
+    if not isinstance(label, dict) or label.get("position") not in LAYOUT_LABEL_POSITIONS:
+        raise ValueError("Choose a valid rectangle label position.")
+    clean = {**_parse_design_text(label), "position": label["position"]}
+    if (color := _parse_design_color(label.get("color"))) is not None:
+        clean["color"] = color
+    return clean
+
+
+def _parse_design_item(item):
+    if not isinstance(item, dict) or item.get("kind") not in ("text", "rectangle", "bay"):
+        raise ValueError("Each design object must be text, a rectangle or a module bay.")
+    kind, x, y = (item.get(key) for key in ("kind", "x", "y"))
+    if not all(type(n) in (int, float) and 0 <= n <= 1 for n in (x, y)):
+        raise ValueError("Place design objects within the face.")
+    clean = {"kind": kind, "x": x, "y": y}
+    if (color := _parse_design_color(item.get("color"))) is not None:
+        clean["color"] = color
+    if kind == "text":
+        return {**clean, **_parse_design_text(item)}
+    width, height = item.get("width"), item.get("height")
+    if (
+        not all(type(n) in (int, float) and 0 < n <= 1 for n in (width, height))
+        or max(x, y) == 1
+        or x + width > 1 + 1e-9
+        or y + height > 1 + 1e-9
+    ):
+        raise ValueError("Keep the entire rectangle or bay inside the face.")
+    clean.update(width=min(width, 1 - x), height=min(height, 1 - y))
+    if kind == "rectangle":
+        if (border := _parse_design_color(item.get("borderColor"))) is not None:
+            clean["borderColor"] = border
+        if (label := item.get("label")) is not None:
+            clean["label"] = _parse_rectangle_label(label)
+    else:
+        bay, module_face = item.get("bay"), item.get("moduleFace", "front")
+        if type(bay) is not int or not 0 < bay < 2**63 or module_face not in LAYOUT_FACES:
+            raise ValueError("Choose a module bay and a valid module face.")
+        clean.update(bay=bay, moduleFace=module_face)
+    return clean
 
 
 @require_POST
 @csrf_protect
-def save_layout(request, pk):
+def save_layout(request, pk, kind="device"):
+    model, field, label, _ = LAYOUT_TYPES[kind]
     if request.content_type != "application/json":
         return JsonResponse({"error": "Send the layout as JSON."}, status=415)
     try:
-        revision, placements = _parse_layout(request.body)
-    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+        revision, placements, design = _parse_layout(request.body)
+    except (json.JSONDecodeError, UnicodeError, RecursionError):
         return JsonResponse({"error": "The port layout is not valid JSON."}, status=400)
     except ValueError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
     try:
         with transaction.atomic():
-            device_type = get_object_or_404(
-                DeviceType.objects.restrict(request.user).select_for_update(), pk=pk
+            owner = get_object_or_404(
+                model.objects.restrict(request.user).select_for_update(of=("self",)), pk=pk
             )
-            if not _can_edit_layout(request.user, device_type):
-                return JsonResponse({"error": "You cannot change this device type."}, status=403)
-            if revision != _layout_revision(pk):
+            if not _can_edit_layout(request.user, owner):
+                return JsonResponse({"error": f"You cannot change this {label.lower()}."}, status=403)
+            owner_filter = {field: owner}
+            layout = LayoutRevision.objects.filter(**owner_filter).first()
+            if revision != (layout.revision if layout else 0):
                 return JsonResponse(
                     {"error": "The layout has changed. Reload before editing it again."}, status=409
                 )
-            allowed_ports = _layout_ports(request.user, device_type)
+            allowed_ports = _layout_ports(request.user, owner_filter)
             if placements.keys() - allowed_ports.keys():
-                return JsonResponse({"error": "A port is no longer available for this device type."}, status=400)
+                return JsonResponse({"error": f"A port is no longer available for this {label.lower()}."}, status=400)
+            updated_design = layout.design.copy() if layout else {}
+            if design is not None:
+                allowed_bays = _layout_bays(request.user, owner_filter)
+                for face, options in design.items():
+                    if any(item["kind"] == "bay" and item["bay"] not in allowed_bays for item in options["items"]):
+                        return JsonResponse({"error": "A module bay is no longer available for this layout."}, status=400)
+                    hidden_bays = [
+                        item for item in updated_design.get(face, {}).get("items", [])
+                        if item["kind"] == "bay" and item["bay"] not in allowed_bays
+                    ]
+                    updated_design[face] = {**options, "items": options["items"] + hidden_bays}
             # An editor with restricted template permissions only replaces their visible subset.
             _layout_placements(allowed_ports).delete()
             PortPlacement.objects.bulk_create(placements.values())
             revision += 1
-            LayoutRevision.objects.update_or_create(device_type=device_type, defaults={"revision": revision})
+            LayoutRevision.objects.update_or_create(
+                **owner_filter, defaults={"revision": revision, "design": updated_design},
+            )
     except IntegrityError:
-        return JsonResponse({"error": "The device type changed during the save. Reload and retry."}, status=409)
+        return JsonResponse({"error": f"The {label.lower()} changed during the save. Reload and retry."}, status=409)
     return JsonResponse({"revision": revision})
 
 
 def _vlan_data_for_ports(user, ports):
     ports = list(ports)
-    readable = VLAN.objects.restrict(user).only("vid", "name")
+    readable = VLAN.objects.restrict(user).only("vid", "name", "custom_field_data")
     prefetch_related_objects(
         ports,
         Prefetch("untagged_vlan", queryset=readable, to_attr="_rack_untagged_vlan"),
@@ -218,11 +395,16 @@ def _vlan_data_for_ports(user, ports):
     )
 
     def vlan_data(vlan):
-        return {"vid": vlan.vid, "name": vlan.name}
+        data = {"vid": vlan.vid, "name": vlan.name}
+        color = vlan.custom_field_data.get("editorColorHex")
+        if isinstance(color, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
+            data["color"] = color.upper()
+        return data
 
     return {
         port.pk: {
             "vlanMode": port.mode or "",
+            "vlanModeDisplay": port.get_mode_display() or "",
             "untaggedVlan": vlan_data(port._rack_untagged_vlan) if port._rack_untagged_vlan else None,
             "taggedVlans": [vlan_data(vlan) for vlan in port._rack_tagged_vlans],
         }
@@ -249,7 +431,11 @@ def _immediate_endpoint(key, cable_id, rack_id, nodes, endpoints):
     return endpoints[key]
 
 
-def _rack_connection_data(user, rack_id, devices, ports):
+def _rack_object_tags(obj, catalog):
+    return [catalog[tag.pk] for tag in obj.tags.all() if tag.pk in catalog]
+
+
+def _rack_connection_data(user, rack_id, devices, ports, tag_catalog):
     interfaces = {port.pk: port for port in ports.values() if isinstance(port, Interface)}
     cable_ids = {port.cable_id for port in ports.values() if port.cable_id is not None}
     if not cable_ids:
@@ -274,7 +460,7 @@ def _rack_connection_data(user, rack_id, devices, ports):
     known_cables = {}
     for cable in Cable.objects.restrict(user).filter(pk__in=cable_ids).annotate(
         has_dependent_records=dependent_records
-    ).prefetch_related("terminations__termination_type").order_by("pk"):
+    ).prefetch_related("terminations__termination_type", "tags").order_by("pk"):
         known_cables[cable.pk] = cable
         terminations = list(cable.terminations.all())
         term_a, term_b = _single_ends(terminations)
@@ -318,19 +504,11 @@ def _rack_connection_data(user, rack_id, devices, ports):
             "endpointB": _immediate_endpoint(peer_b, cable.pk, rack_id, nodes, endpoints),
             "traceA": trace_payload(trace_a, cable.pk, cable_type.pk, endpoints, links),
             "traceB": trace_payload(trace_b, cable.pk, cable_type.pk, endpoints, links),
-            "label": cable.label,
-            "color": cable.color,
-            "status": cable.get_status_display(),
-            "statusValue": cable.status,
-            "type": cable.get_type_display() if cable.type else "",
-            "typeValue": cable.type or "",
-            "description": cable.description,
-            "length": (
-                f"{cable.length} {cable.get_length_unit_display() or ''}".strip()
-                if cable.length is not None else None
-            ),
+            **cable_details(cable),
+            "tags": _rack_object_tags(cable, tag_catalog),
             "profile": cable.get_profile_display() if cable.profile else "",
             "url": cable.get_absolute_url(),
+            "metadataEditable": cable.pk in change_ids,
             "editable": bool(
                 simple_in_rack and cable.pk in change_ids
                 and not port_unavailable(end_a) and not port_unavailable(end_b)
@@ -354,6 +532,12 @@ def _occupancy(port):
 
 @require_GET
 def rack_editor(request, pk):
+    return render(request, "netbox_rack_editor/rack.html", _rack_editor_context(request, pk))
+
+
+@override("en")
+def _rack_editor_context(request, pk):
+    # Match the editor's English labels while letting the NetBox page use its own language.
     user = request.user
     rack = get_object_or_404(Rack.objects.restrict(user), pk=pk)
     devices = list(
@@ -365,53 +549,59 @@ def rack_editor(request, pk):
     visible_types = set(
         DeviceType.objects.restrict(user).filter(pk__in=type_ids).values_list("pk", flat=True)
     )
-    by_template = {}
-    for kind, (_, field, _) in LAYOUT_PORTS.items():
-        relation = field.removesuffix("_id")
-        placements = PortPlacement.objects.filter(
-            **{f"{relation}__device_type_id__in": type_ids},
-        ).select_related(relation)
-        for placement in placements:
-            template = getattr(placement, relation)
-            by_template[kind, template.device_type_id, template.name] = placement
+    by_template, by_module_template, artwork = rack_layouts(
+        user, devices, visible_types, LAYOUT_PORTS, layout_designs, _module_images,
+    )
 
+    tag_catalogs = {model: {tag.pk: tag_data(tag) for tag in available_tags(rack._state.db, user, model)}
+                    for model in (Cable, *PORT_KINDS)}
     ports = {}
+    editable_ports = {}
     for model in PORT_KINDS:
-        queryset = model.objects.restrict(user).filter(device_id__in=device_map).order_by("device_id", "name", "pk")
+        queryset = model.objects.restrict(user).filter(device_id__in=device_map).prefetch_related("tags").order_by("device_id", "name", "pk")
         if model is Interface:
             queryset = queryset.select_related("virtual_circuit_termination", "_path")
         ports.update({port_key(model, port.pk): port for port in queryset})
-    cables, vlans = _rack_connection_data(user, rack.pk, device_map, ports)
+        editable_ports[model] = set(model.objects.restrict(user, "change").filter(device_id__in=device_map).values_list("pk", flat=True))
+    cables, vlans = _rack_connection_data(user, rack.pk, device_map, ports, tag_catalogs[Cable])
     visible_cable_ids = {cable["id"] for cable in cables}
     by_device = defaultdict(list)
     for key, port in ports.items():
         device = device_map[port.device_id]
         kind = PORT_KINDS[type(port)]
-        placement = by_template.get((kind, device.device_type_id, port.name)) if port.module_id is None else None
+        is_interface = isinstance(port, Interface)
+        placement = (
+            by_template.get((kind, device.device_type_id, port.name))
+            if port.module_id is None
+            else by_module_template.get((port.module_id, kind, port.name))
+        )
         cable_visible = port.cable_id in visible_cable_ids
         by_device[device.pk].append({
             "id": key,
-            "kind": kind,
+            **port_metadata(port),
             "name": port.name,
-            "label": port.label,
-            "description": port.description,
-            "type": port.get_type_display(),
             "url": port.get_absolute_url(),
-            **(vlans[port.pk] if isinstance(port, Interface) else {
-                "vlanMode": "", "untaggedVlan": None, "taggedVlans": [],
+            "tags": _rack_object_tags(port, tag_catalogs[type(port)]),
+            "metadataEditable": port.pk in editable_ports[type(port)],
+            **({
+                **vlans[port.pk],
+                "speedKbps": port.speed,
+                "duplex": port.get_duplex_display() or "",
+                "mtu": port.mtu,
+                "managementOnly": port.mgmt_only,
+            } if is_interface else {
+                "vlanMode": "", "vlanModeDisplay": "", "untaggedVlan": None, "taggedVlans": [],
             }),
-            "face": placement.face if placement else LAYOUT_PORTS[kind][2],
-            "x": placement.x if placement else None,
-            "y": placement.y if placement else None,
+            **(placement or {"face": LAYOUT_PORTS[kind][2], "x": None, "y": None}),
             "cableId": port.cable_id if cable_visible else None,
-            "enabled": port.enabled if isinstance(port, Interface) else True,
             "occupancy": _occupancy(port),
             "blocked": port_unavailable(port) or (port.cable_id is not None and not cable_visible),
         })
 
-    return render(request, "netbox_rack_editor/rack.html", {
+    return {
         "rack": rack,
         "cable_url": _route("cables", pk),
+        "port_url": _route("ports", pk),
         "cable_color_palette": CABLE_COLOR_PALETTE,
         "editor_version": RackEditorConfig.version,
         "rack_data": {
@@ -428,6 +618,7 @@ def rack_editor(request, pk):
                     "face": device.face or None,
                     "fullDepth": device.device_type.is_full_depth,
                     **_images(device.device_type),
+                    "design": artwork.get(device.pk, {}),
                     "layoutUrl": _route("layout", device.device_type_id) if device.device_type_id in visible_types else None,
                     "url": device.get_absolute_url(),
                     "ports": by_device[device.pk],
@@ -435,16 +626,24 @@ def rack_editor(request, pk):
                 for device in devices
             ],
             "cables": cables,
+            "availableTags": {
+                "cable": list(tag_catalogs[Cable].values()) if any(cable["metadataEditable"] for cable in cables) else [],
+                **{kind: list(tag_catalogs[model].values()) if editable_ports[model] else []
+                   for model, kind in PORT_KINDS.items()},
+            },
             "cableTypes": [
-                {"value": value, "label": label} for value, label in Cable._meta.get_field("type").flatchoices
+                {"value": value, "label": str(label)} for value, label in Cable._meta.get_field("type").flatchoices
                 if value
             ],
             "cableStatuses": [
-                {"value": value, "label": label} for value, label in Cable._meta.get_field("status").flatchoices
+                {"value": value, "label": str(label)} for value, label in Cable._meta.get_field("status").flatchoices
+            ],
+            "cableLengthUnits": [
+                {"value": value, "label": str(label)} for value, label in Cable._meta.get_field("length_unit").flatchoices
             ],
             "canAdd": user.has_perm("dcim.add_cable"),
             "canChange": user.has_perm("dcim.change_cable"),
             "canDelete": user.has_perm("dcim.delete_cable"),
             "history": history_for_rack(user, rack.pk),
         },
-    })
+    }

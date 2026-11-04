@@ -13,6 +13,19 @@ MAX_TRACE_STEPS = 60
 MAX_TRACE_GROUP_SIZE = 32
 
 
+def port_metadata(port):
+    is_interface = isinstance(port, Interface)
+    return {
+        "kind": PORT_KINDS[type(port)],
+        "label": port.label,
+        "description": port.description,
+        "type": port.get_type_display(),
+        "poeMode": (port.get_poe_mode_display() or "") if is_interface else "",
+        "poeType": (port.get_poe_type_display() or "") if is_interface else "",
+        "enabled": port.enabled if is_interface else True,
+    }
+
+
 def native_path(port, cable_id, types):
     """Read the path already maintained by NetBox. Do not recalculate topology in a rack GET."""
     if not isinstance(port, Interface) or (path := port.path) is None:
@@ -100,9 +113,11 @@ def endpoint_data(user, port_nodes, vlans, rack_devices, rack_ports):
     for key, port in port_nodes.items():
         device = devices[port.device_id]
         row = {
-            "kind": PORT_KINDS[type(port)],
+            **port_metadata(port),
             "deviceName": device.name or device.label or "Unnamed device",
+            "deviceUrl": device.get_absolute_url(),
             "portName": port.name,
+            "portUrl": port.get_absolute_url(),
         }
         if device.pk in rack_devices:
             row["deviceId"] = device.pk

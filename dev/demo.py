@@ -108,6 +108,23 @@ def set_demo_vlan(interface, untagged, tagged=None):
         interface.tagged_vlans.add(tagged)
 
 
+def legacy_demo_device(site, device_type, name):
+    if not name:
+        return None
+    return Device.objects.filter(site=site, device_type=device_type, name=name).first()
+
+
+def demo_endpoint(site, office, device_type, role, name, legacy_name=None):
+    # Keep earlier demo devices, cables, and user edits when the seed is run again.
+    device = legacy_demo_device(site, device_type, legacy_name)
+    if device is None:
+        device, _ = Device.objects.get_or_create(
+            site=site, name=name,
+            defaults={"location": office, "device_type": device_type, "role": role},
+        )
+    return device
+
+
 def seed_patch_demo(rack, switch, manufacturer):
     site = rack.site
     panel_type = passive_type(
@@ -133,9 +150,12 @@ def seed_patch_demo(rack, switch, manufacturer):
         slug="rack-editor-demo-client", defaults={"name": "Demo Endpoint", "color": "168577"},
     )
     office, _ = Location.objects.get_or_create(site=site, slug="rack-editor-demo-office",
-                                               defaults={"name": "Demo Büro"})
+                                               defaults={"name": "Demo Office"})
 
-    panel = Device.objects.filter(site=site, name="Patchpanel PP-01").first()
+    panel_name = "Patch Panel PP-01"
+    panel = legacy_demo_device(site, panel_type, "Patchpanel PP-01")
+    if panel is None:
+        panel = Device.objects.filter(site=site, name=panel_name).first()
     if panel is None:
         available = rack.get_available_units()
         position = 8 if 8 in available else next(iter(available), None)
@@ -144,10 +164,10 @@ def seed_patch_demo(rack, switch, manufacturer):
             return
         panel = Device.objects.create(
             site=site, rack=rack, position=position, face="front", device_type=panel_type,
-            role=passive_role, name="Patchpanel PP-01",
+            role=passive_role, name=panel_name,
         )
     if panel.rack_id != rack.pk or panel.device_type_id != panel_type.pk:
-        print("Skipped patch panel demo: Patchpanel PP-01 is already used by another setup.")
+        print(f"Skipped patch panel demo: {panel.name} is already used by another setup.")
         return
 
     for number in range(1, 7):
@@ -175,17 +195,16 @@ def seed_patch_demo(rack, switch, manufacturer):
     management, _ = VLAN.objects.get_or_create(group=vlan_group, vid=99, defaults={"name": "Lab Management"})
 
     lanes = (
-        (36, "Arbeitsplatz PC-01", "demo-workstation", "Demo Workstation", "2563eb"),
-        (38, "Drucker PR-01", "demo-printer", "Demo Printer", "198754"),
-        (42, "Access Point AP-01", "demo-access-point", "Demo Access Point", "a855f7"),
-        (46, None, None, None, "e6ad23"),
+        (36, "Workstation PC-01", "Arbeitsplatz PC-01", "demo-workstation", "Demo Workstation", "2563eb"),
+        (38, "Printer PR-01", "Drucker PR-01", "demo-printer", "Demo Printer", "198754"),
+        (42, "Access Point AP-01", None, "demo-access-point", "Demo Access Point", "a855f7"),
+        (46, None, None, None, None, "e6ad23"),
     )
-    for number, (switch_port, client_name, client_slug, client_model, color) in enumerate(lanes, start=1):
+    for number, (switch_port, client_name, legacy_client, client_slug, client_model, color) in enumerate(lanes, start=1):
         panel_jack = f"P{number:02}"
-        outlet_name = f"Wanddose WD-{number:02}"
-        outlet, _ = Device.objects.get_or_create(
-            site=site, name=outlet_name,
-            defaults={"location": office, "device_type": outlet_type, "role": passive_role},
+        outlet_name = f"Wall Outlet WD-{number:02}"
+        outlet = demo_endpoint(
+            site, office, outlet_type, passive_role, outlet_name, f"Wanddose WD-{number:02}",
         )
         if outlet.device_type_id != outlet_type.pk:
             print(f"Skipped {outlet_name}: the name is already used by another device.")
@@ -203,7 +222,7 @@ def seed_patch_demo(rack, switch, manufacturer):
                 set_demo_vlan(uplink, untagged, tagged)
         else:
             print(f"Skipped Demo Patch {panel_jack}: {uplink.name} is unavailable.")
-        connect_demo(panel_rear, outlet_rear, label=f"Demo Festverkabelung WD-{number:02}", color="808995")
+        connect_demo(panel_rear, outlet_rear, label=f"Demo Permanent Link WD-{number:02}", color="808995")
 
         if client_name:
             client_type, _ = DeviceType.objects.get_or_create(
@@ -212,22 +231,19 @@ def seed_patch_demo(rack, switch, manufacturer):
             InterfaceTemplate.objects.get_or_create(
                 device_type=client_type, name="Ethernet1", defaults={"type": InterfaceTypeChoices.TYPE_1GE_FIXED},
             )
-            client, _ = Device.objects.get_or_create(
-                site=site, name=client_name,
-                defaults={"location": office, "device_type": client_type, "role": client_role},
-            )
+            client = demo_endpoint(site, office, client_type, client_role, client_name, legacy_client)
             if client.device_type_id != client_type.pk:
                 print(f"Skipped {client_name}: the name is already used by another device.")
                 continue
             nic = client.interfaces.get(name="Ethernet1")
             if nic.enabled and not port_unavailable(nic):
-                if connect_demo(outlet_front, nic, label=f"Demo Anschluss WD-{number:02}", color=color):
+                if connect_demo(outlet_front, nic, label=f"Demo Endpoint Patch WD-{number:02}", color=color):
                     set_demo_vlan(nic, untagged, tagged)
 
     spare = switch.interfaces.get(name="Ethernet48")
     if spare.enabled and not spare.cable_id and not port_unavailable(spare):
         set_demo_vlan(spare, clients)
-    print(f"Patch demo: {rack.get_absolute_url()} · Switch A #{switch.pk} · Patchpanel PP-01 #{panel.pk}")
+    print(f"Patch demo: {rack.get_absolute_url()} · Switch A #{switch.pk} · {panel.name} #{panel.pk}")
 
 
 with transaction.atomic():

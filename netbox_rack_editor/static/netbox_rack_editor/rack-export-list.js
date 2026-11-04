@@ -80,7 +80,7 @@
     }
     cell.append(element(document, "span", "re-rack-export-cable-label", cable.label || id));
 
-    const meta = [cable.label && id, groupDetails.type ? null : cable.type,
+    const meta = [cable.label && id, groupDetails.type ? null : cable.type, cable.length,
       groupDetails.status ? null : cable.status].filter(Boolean);
     const hex = cable.color?.replace(/^#/, "");
     if (/^[0-9a-f]{6}$/i.test(hex ?? "")) {

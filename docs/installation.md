@@ -1,29 +1,29 @@
-# Rack Cable Editor installieren
+# Install Rack Cable Editor
 
-Eine bestehende NetBox-Instanz ab **4.5.10** innerhalb der **4.5-Reihe** und mindestens **Python 3.12** im NetBox-Environment sind erforderlich. Das Paket heißt `netbox-rack-editor`, das Plugin in der NetBox-Konfiguration `netbox_rack_editor`.
+Rack Cable Editor requires an existing NetBox 4.5 installation at version **4.5.10 or later** and **Python 3.12 or later** in the NetBox environment. The Python package is `netbox-rack-editor`. In NetBox configuration, the plugin is named `netbox_rack_editor`.
 
-## Bestehende Python-Installation
+## Install on an existing NetBox instance
 
-Die Befehle zeigen eine NetBox-Installation unter `/opt/netbox`. Die Pfade an die eigene Instanz anpassen. Vor Änderungen an einer produktiven Instanz die Datenbank sichern.
+These commands assume NetBox is installed under `/opt/netbox`. Adjust the paths for your instance. Back up the database before making changes to a production instance.
 
-1. Dieses Repository auf den NetBox-Host kopieren und das Paket mit dem Python-Interpreter von NetBox installieren.
+1. Copy this repository to the NetBox host and install the package using NetBox's Python interpreter.
 
    ```sh
-   /opt/netbox/venv/bin/python -m pip install /pfad/zu/nbCableEditor
+   /opt/netbox/venv/bin/python -m pip install /path/to/nbCableEditor
    ```
 
-   Ein lokal gebautes Wheel kann anstelle des Quellordners übergeben werden.
+   You can also pass a locally built wheel to `pip install`.
 
-2. In der aktiven `configuration.py` den Eintrag `"netbox_rack_editor"` zur bestehenden Liste `PLUGINS` hinzufügen.
+2. Add `"netbox_rack_editor"` to the existing `PLUGINS` list in the active `configuration.py`.
 
    ```python
    PLUGINS = [
-       # Weitere vorhandene Plugins hier beibehalten.
+       # Keep any existing plugins here.
        "netbox_rack_editor",
    ]
    ```
 
-3. Migrationen anwenden und die statischen Dateien für die Oberfläche bereitstellen.
+3. Apply the migrations, collect the static assets, and check the plugin's migration status.
 
    ```sh
    cd /opt/netbox/netbox
@@ -32,15 +32,15 @@ Die Befehle zeigen eine NetBox-Installation unter `/opt/netbox`. Die Pfade an di
    /opt/netbox/venv/bin/python manage.py showmigrations netbox_rack_editor
    ```
 
-4. NetBox und seine Worker neu starten. Bei einer Standardinstallation mit systemd lautet der Befehl `sudo systemctl restart netbox netbox-rq`. Anschließend an einem Rack **Cable editor** und an einem Gerätetyp **Port layout** öffnen.
+4. Restart NetBox and its workers. On a standard systemd installation, run `sudo systemctl restart netbox netbox-rq`. Then open **Cable editor** from a rack and **Layout editor** from a device type or module type.
 
-Bei einem späteren NetBox-Upgrade mit `upgrade.sh` muss das Plugin erneut verfügbar sein, wenn das virtuelle Environment neu erstellt wird. Einen dauerhaften Pfad zum Plugin-Paket in der lokalen Abhängigkeitsliste `/opt/netbox/local_requirements.txt` hinterlegen, sofern diese Installation den NetBox-Upgrade-Workflow verwendet. [NetBox 4.5.10 · Plugins installieren](https://github.com/netbox-community/netbox/blob/v4.5.10/docs/plugins/installation.md) · [NetBox 4.5.10 · Upgrade](https://github.com/netbox-community/netbox/blob/v4.5.10/docs/installation/upgrading.md)
+If you use NetBox's `upgrade.sh` workflow, add a persistent path to the plugin package to `/opt/netbox/local_requirements.txt`. This makes the plugin available when an upgrade recreates the virtual environment. [NetBox 4.5.10 plugin installation guide](https://github.com/netbox-community/netbox/blob/v4.5.10/docs/plugins/installation.md) · [NetBox 4.5.10 upgrade guide](https://github.com/netbox-community/netbox/blob/v4.5.10/docs/installation/upgrading.md)
 
-## Bestehendes NetBox Docker
+## Install on an existing NetBox Docker deployment
 
-Das Plugin in ein eigenes Image aufnehmen und dasselbe Image für die NetBox-Webinstanz und ihre Worker verwenden. Die Compose-Datei unter `dev/` dient der lokalen Demo.
+Build the plugin into a custom image and use that image for both the NetBox web service and its workers. The Compose file under `dev/` runs the local demo.
 
-1. Den Ordner `nbCableEditor` im Build-Kontext der bestehenden NetBox-Docker-Installation bereitstellen. Den folgenden Ausschnitt in das eigene Dockerfile übernehmen. Die `FROM`-Zeile zeigt das Basisimage der Demo als Beispiel. Bei einer bestehenden Installation das zur Compose-Konfiguration passende Image innerhalb der unterstützten NetBox-Versionen verwenden.
+1. Place the `nbCableEditor` directory in the build context of your NetBox Docker deployment. Use the following example in your Dockerfile. Choose a supported NetBox base image that matches your Compose configuration. The demo uses the image shown here.
 
    ```dockerfile
    FROM ghcr.io/netbox-community/netbox:v4.5.10
@@ -49,33 +49,40 @@ Das Plugin in ein eigenes Image aufnehmen und dasselbe Image für die NetBox-Web
    RUN /usr/local/bin/uv pip install --python /opt/netbox/venv/bin/python /tmp/nbCableEditor
    ```
 
-2. `"netbox_rack_editor"` in der von den Containern geladenen Liste `PLUGINS` ergänzen, bei NetBox Docker üblicherweise in `configuration/plugins.py`.
-3. Das Image bauen und die Plugin-Assets mit aktivierter Plugin-Konfiguration per `collectstatic --no-input` in den statischen Pfad der Bereitstellung übernehmen. Beim offiziellen NetBox-Docker-Ablauf wird dieser Schritt in das Dockerfile aufgenommen. Falls der statische Pfad als eigenes Volume eingebunden ist, die Dateien in diesem Volume bereitstellen.
-4. Webinstanz und Worker mit dem neuen Image bereitstellen. `manage.py migrate` muss gegen die Datenbank dieser Instanz gelaufen sein, bevor der Editor genutzt wird. Anschließend die beiden Editor-Schaltflächen und ihre Oberfläche in NetBox prüfen. [NetBox Docker · Eigenes Image, Plugin-Konfiguration und collectstatic](https://github.com/netbox-community/netbox-docker/wiki/Using-Netbox-Plugins)
+2. Add `"netbox_rack_editor"` to the `PLUGINS` list loaded by the containers. NetBox Docker typically uses `configuration/plugins.py`.
+3. Build the image and run `collectstatic --no-input` with the plugin enabled. The official NetBox Docker workflow includes this step in the Dockerfile. If your deployment mounts a separate volume for static assets, collect the files into that volume.
+4. Deploy the web service and workers with the new image. Run `manage.py migrate` against the deployment's database before using the editor. Then verify that both editor buttons open the expected screens in NetBox. [NetBox Docker guide to custom images, plugin configuration, and static assets](https://github.com/netbox-community/netbox-docker/wiki/Using-Netbox-Plugins)
 
-## Plugin aktualisieren
+## Upgrade the plugin
 
-1. Datenbank sichern und prüfen, ob die NetBox-Version von der neuen Plugin-Ausgabe unterstützt wird.
-2. Bei einer Python-Installation die neue Quelle oder das neue Wheel mit `/opt/netbox/venv/bin/python -m pip install --upgrade /pfad/zu/nbCableEditor` installieren. Bei Docker das Image mit der neuen Plugin-Ausgabe neu bauen und für Webinstanz und Worker ausrollen.
-3. Migrationen erneut anwenden und statische Dateien erneut einsammeln. Die bestehende Plugin-Konfiguration beibehalten.
-4. NetBox und Worker neu starten beziehungsweise die Container neu erstellen. Ein bekanntes Rack und einen Gerätetyp öffnen und vorhandene Kabel und Portpositionen prüfen.
+1. Back up the database and check that the new plugin release supports your NetBox version.
+2. For a Python installation, install the new source or wheel with `/opt/netbox/venv/bin/python -m pip install --upgrade /path/to/nbCableEditor`. For Docker, rebuild the image with the new plugin release and deploy it to the web service and workers.
+3. Apply the migrations and collect the static assets again. Keep the existing plugin configuration.
+4. Restart NetBox and its workers, or recreate the containers. Open a rack and device type with existing data to check that cables and port positions appear as expected.
 
-## Berechtigungen
+## Configure VLAN colors
 
-Der Editor verwendet die nativen NetBox-Objektrechte einschließlich etwaiger Objektfilter.
+The migration adds the optional text field `editorColorHex` to the NetBox **IPAM → VLAN** object type. Open a VLAN and enter a hex color such as `#16A34A` under **Edit → Rack editor color**. Each VLAN object has its own color, including when the same VLAN ID appears in several groups. Rolling back the plugin migration preserves the field and its values.
 
-| Aufgabe | Erforderliche NetBox-Rechte |
+The migration reuses an existing text field with this internal name for VLANs and keeps its settings. If a field of another type already uses the name, the migration leaves that field untouched.
+
+## Permissions
+
+The editor respects NetBox object permissions and any object filters.
+
+| Task | Required NetBox permissions |
 | --- | --- |
-| Rackansicht lesen | **View** auf das Rack, die sichtbaren Geräte und ihre Ports. Der Modellname in den Anschlussdetails und der Link zum Portlayout im Interface-Verzeichnis setzen auch **View** auf den jeweiligen Gerätetyp voraus. |
-| Kabel und VLAN-Daten sehen | **View** auf die entsprechenden Kabel und VLANs. Eine Strecke zeigt nur die Stationen, für die Leserechte bestehen. |
-| Portlayout ansehen | **View** auf den Gerätetyp und auf die verwendeten Interface-, Front-Port- und Rear-Port-Templates. |
-| Portlayout speichern | Zusätzlich **Change** auf den Gerätetyp. |
-| Kabel anlegen, umstecken oder löschen | **Add**, **Change** oder **Delete** auf das native Kabelobjekt, je nach Aktion. Für Änderungen müssen die beteiligten Geräte und Anschlüsse für die Person zugänglich sein. |
-| Verlauf wiederherstellen | Die Rechte für die jeweiligen Kabeloperationen. Der Verlauf ist pro Benutzer und Rack gespeichert. |
+| View the rack | **View** on the rack, visible devices, and their ports. The device model in connection details and the layout link in the interface directory also require **View** on the corresponding device type. |
+| View cables and VLAN data | **View** on the relevant cables and VLANs. A cable trace shows the points the user has permission to view. |
+| View a port layout | **View** on the device type or module type and on the interface, front port, rear port, and module bay templates it uses. |
+| Save a port layout | Also requires **Change** on the device type or module type. |
+| View installed modules in the rack | **View** on module bays, module bay templates, modules, and module types. Module type images also require **View** on the relevant image attachments. |
+| Create, move, or delete a cable | **Add**, **Change**, or **Delete** on the native NetBox cable object, according to the action. The user also needs access to the devices and ports at both ends. |
+| Restore a history entry | The permissions required for the corresponding cable operations. History is stored per user and rack. |
 
-## Häufige Prüfungen
+## Troubleshooting
 
-- **Plugin lässt sich nicht importieren.** Prüfen, ob das Paket im NetBox-Environment installiert ist und der Konfigurationseintrag Unterstriche verwendet.
-- **Schaltfläche fehlt oder Änderungen erscheinen nicht.** Aktive Plugin-Konfiguration und geladenen Paketstand prüfen. Webinstanz und Worker müssen die neue Version laden.
-- **Editor lädt ohne Oberfläche.** Migrationen und `collectstatic` prüfen und sicherstellen, dass der Webserver die eingesammelten statischen Dateien ausliefert.
-- **Gerätebild oder Port fehlt.** Gerätetyp, Bild der gewählten Seite, Portposition und Leserechte prüfen. Unter **View** und **Port rows** die aktuelle Ansicht kontrollieren.
+- **NetBox cannot import the plugin.** Check that the package is installed in the NetBox Python environment and that the configuration entry uses underscores.
+- **An editor button is missing or changes do not appear.** Check the active plugin configuration and installed package version. Verify that both the web service and workers load the new version.
+- **The editor loads without its interface.** Verify the migrations and `collectstatic` step, then check that the web server serves the collected assets.
+- **A device image or port is missing.** Check the device type, the image for the selected face, the port position, and the user's view permissions. Check the current visibility settings under **View** and **Port rows**.

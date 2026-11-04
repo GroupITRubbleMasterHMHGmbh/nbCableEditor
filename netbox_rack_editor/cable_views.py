@@ -2,23 +2,27 @@ import json
 import re
 from collections import defaultdict
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, OperationalError, router, transaction
 from django.db.models import Q
 from django.http import JsonResponse
+from django.utils.translation import override
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_POST
 
 from core.models import ObjectType
 from core.signals import clear_events
-from dcim.choices import CableEndChoices, CableProfileChoices, CableTypeChoices, LinkStatusChoices
+from dcim.choices import CableEndChoices, CableLengthUnitChoices, CableProfileChoices, CableTypeChoices, LinkStatusChoices
 from dcim.constants import NONCONNECTABLE_IFACE_TYPES
 from dcim.models import Cable, CableTermination, Device, FrontPort, Interface, Rack, RearPort
 from extras.models import Tag
+from utilities.conversion import to_meters
 from utilities.exceptions import AbortRequest
 
 from .cable_history import HistoryConflictError, history_payload, jump_history, lock_history, record_history
+from .metadata_tags import TagEditError, available_tags, updated_tags, visible_tags
 
 
 MAX_BATCH_OPERATIONS = 100
@@ -111,14 +115,45 @@ def _request_data(request):
 def _cable_text(data, field):
     value = data[field]
     max_length = Cable._meta.get_field(field).max_length
-    if not isinstance(value, str) or len(value) > max_length:
+    if not isinstance(value, str):
+        raise CableEditError(f"Enter text for the cable {field}.", 400)
+    if max_length is not None and len(value) > max_length:
         raise CableEditError(f"The cable {field} must be at most {max_length} characters.", 400)
     if re.search(r"[\x00\ud800-\udfff]", value):
         raise CableEditError(f"The cable {field} contains an invalid character.", 400)
     return value
 
 
-def _cable_fields(data, *, update=False):
+def _cable_length_fields(data, cable):
+    value = data.get("length", cable.length if cable is not None else None)
+    unit = data.get("length_unit", cable.length_unit if cable is not None else None)
+    if unit not in (None, "") and unit not in CableLengthUnitChoices.values():
+        raise CableEditError("Choose a valid NetBox cable length unit.", 400)
+    if value is None or value == "":
+        return {"length": None, "length_unit": None}
+    if type(value) not in (int, float, str, Decimal) or (isinstance(value, str) and len(value) > 32):
+        raise CableEditError("Enter a cable length with up to two decimal places.", 400)
+    try:
+        length = Decimal(str(value))
+        if not length.is_finite() or length < 0:
+            raise InvalidOperation
+        # Use the model's stored precision so history snapshots match the values reloaded from NetBox.
+        stored = length.quantize(Decimal("0.01"))
+        if stored != length:
+            raise InvalidOperation
+        Cable._meta.get_field("length").clean(stored, None)
+    except (InvalidOperation, ValidationError):
+        raise CableEditError("Enter a nonnegative cable length with up to six whole and two decimal digits.", 400) from None
+    if not unit:
+        raise CableEditError("Choose a unit for the cable length.", 400)
+    try:
+        Cable._meta.get_field("_abs_length").clean(to_meters(stored, unit), None)
+    except ValidationError:
+        raise CableEditError("The cable length exceeds the NetBox limit for this unit.", 400) from None
+    return {"length": stored, "length_unit": unit}
+
+
+def _cable_fields(data, *, cable=None):
     fields = {}
     if "type" in data:
         cable_type = data["type"]
@@ -134,17 +169,35 @@ def _cable_fields(data, *, update=False):
         fields["color"] = color.removeprefix("#").lower()
     if "label" in data:
         fields["label"] = _cable_text(data, "label")
-    if update:
-        if "description" in data:
-            fields["description"] = _cable_text(data, "description")
+    if "length" in data or "length_unit" in data:
+        fields.update(_cable_length_fields(data, cable))
+    if cable is not None:
+        for name in ("description", "comments"):
+            if name in data:
+                fields[name] = _cable_text(data, name)
         if "status" in data:
             status = data["status"]
             if status not in LinkStatusChoices.values():
                 raise CableEditError("Choose a valid NetBox cable status.", 400)
             fields["status"] = status
-        if not fields:
+        if not fields and "tags" not in data:
             raise CableEditError("Choose at least one cable detail to update.", 400)
     return fields
+
+
+@override("en")
+def cable_details(cable):
+    """Editable cable fields in the same form for rack loading and autosave."""
+    return {
+        "label": cable.label, "color": cable.color, "description": cable.description, "comments": cable.comments,
+        "status": cable.get_status_display(), "statusValue": cable.status,
+        "type": cable.get_type_display() if cable.type else "", "typeValue": cable.type or "",
+        "length": (
+            f"{cable.length} {cable.get_length_unit_display() or ''}".strip() if cable.length is not None else None
+        ),
+        "lengthValue": str(cable.length) if cable.length is not None else None,
+        "lengthUnit": cable.length_unit or "",
+    }
 
 
 def _lock_ports(db, user, rack_id, keys):
@@ -182,15 +235,41 @@ def _cable_ends(db, cable):
     return CableTermination.objects.using(db).filter(cable=cable).order_by("cable_end", "pk")
 
 
-def _lock_cable(db, user, allowed, cable_id):
+def _lock_cable(db, user, allowed, cable_id, *, require_simple=True):
     permitted = allowed.restrict(user).filter(pk=cable_id)
     cable = permitted.select_for_update(of=("self",)).first()
     if cable is None:
         raise CableEditError("Cable not found.", 404)
     ends = list(_cable_ends(db, cable).select_related("termination_type").select_for_update(of=("self",)))
-    if not is_simple_cable(cable, ends):
+    if require_simple and not is_simple_cable(cable, ends):
         raise CableEditError("This cable no longer has two editable ends.", 409)
     return cable, ends, permitted
+
+
+def _lock_rack_cable_metadata(db, user, rack_id, cable_id):
+    allowed = _allowed_cables(db, user, "change")
+    cable, ends, permitted = _lock_cable(db, user, allowed, cable_id, require_simple=False)
+    port_ids = defaultdict(set)
+    for end in ends:
+        model = end.termination_type.model_class()
+        if model in PORT_MODELS:
+            port_ids[model].add(end.termination_id)
+    devices = Device.objects.using(db).restrict(user).filter(rack_id=rack_id)
+    for model in PORT_MODELS:
+        if model not in port_ids:
+            continue
+        rack_ports = (
+            model.objects.using(db).restrict(user)
+            .filter(pk__in=port_ids[model], device_id__in=devices.values("pk"), cable_id=cable.pk)
+            .order_by("pk").select_for_update(of=("self",))
+        )
+        local_devices = (
+            devices.filter(pk__in=set(rack_ports.values_list("device_id", flat=True)))
+            .order_by("pk").select_for_update(of=("self",), no_key=True)
+        )
+        if local_devices.exists() and permitted.exists():
+            return cable, ends, permitted
+    raise CableEditError("No readable port on this cable is in the rack.", 404)
 
 
 def _check_current_ends(cable, keys, ports, permitted):
@@ -237,35 +316,63 @@ def _delete_cable(db, cable):
         raise CableEditError(message, 409)
 
 
-def _cable_snapshot(db, cable, ends=None):
+def _cable_snapshot(db, cable, ends=None, *, metadata_only=False):
     # Timestamps, terminations' database IDs and NetBox's derived length/path caches are not editable state.
     if ends is None:
         ends = _cable_ends(db, cable).select_related("termination_type")
     fields = deepcopy({name: getattr(cable, name) for name in CABLE_METADATA})
     fields["length"] = str(cable.length) if cable.length is not None else None
-    return {
+    snapshot = {
         "id": cable.pk,
         "fields": fields,
         "tags": list(cable.tags.using(db).order_by("pk").values_list("pk", flat=True)),
-        "ends": {
+    }
+    if metadata_only:
+        snapshot["metadata_only"] = True
+        snapshot["ends"] = [
+            [end.cable_end, end.termination_type_id, end.termination_id, end.connector, end.positions]
+            for end in ends
+        ]
+    else:
+        snapshot["ends"] = {
             end.cable_end: {"port": _end_key(end), "connector": end.connector, "positions": end.positions}
             for end in ends
-        },
-    }
+        }
+    return snapshot
+
+
+def _edit_cable_metadata(db, user, rack_id, data):
+    cable_id = data.get("cable_id")
+    if not _is_object_id(cable_id):
+        raise CableEditError("Invalid cable ID.", 400)
+    cable, ends, allowed = _lock_rack_cable_metadata(db, user, rack_id, cable_id)
+    fields = _cable_fields(data, cable=cable)
+    before = _cable_snapshot(db, cable, ends, metadata_only=True)
+    tags = None
+    if "tags" in data:
+        tags = updated_tags(db, user, cable, data["tags"], expected=data.get("expected_tags"))
+        if sorted(tag.pk for tag in tags) == before["tags"]:
+            tags = None
+    if tags is None and all(getattr(cable, name) == value for name, value in fields.items()):
+        return cable, before, before
+    cable.snapshot()
+    for name, value in fields.items():
+        setattr(cable, name, value)
+    _save_cable(db, cable, allowed, tags=tags)
+    return cable, before, _cable_snapshot(db, cable, metadata_only=True)
 
 
 def _edit_cable(db, user, rack_id, data):
     requested_action = data.get("action")
-    if requested_action not in (None, "delete", "update"):
+    if requested_action not in (None, "delete"):
         raise CableEditError("Invalid cable action.", 400)
-    update_details = requested_action == "update"
     cable_id = data.get("cable_id")
     if (cable_id is not None or requested_action is not None) and not _is_object_id(cable_id):
         raise CableEditError("Invalid cable ID.", 400)
 
     source, target = data.get("source"), data.get("target")
     if requested_action is not None:
-        action = "change" if update_details else "delete"
+        action = "delete"
         keys = set()
     else:
         if _port_reference(source) is None or _port_reference(target) is None or source == target:
@@ -296,15 +403,6 @@ def _edit_cable(db, user, rack_id, data):
     if any(port_unavailable(port) for port in ports.values()):
         raise CableEditError("A port cannot accept a physical cable.", 409)
 
-    if update_details:
-        fields = _cable_fields(data, update=True)
-        if all(getattr(cable, key) == value for key, value in fields.items()):
-            return {"before": before, "after": before}
-        for key, value in fields.items():
-            setattr(cable, key, value)
-        _save_cable(db, cable, allowed)
-        return {"before": before, "after": _cable_snapshot(db, cable, ends)}
-
     _check_free_ports(db, ports, {target} if cable is not None else keys)
 
     if cable is None:
@@ -323,6 +421,8 @@ def _edit_cable(db, user, rack_id, data):
 
 
 def _apply_cable_change(db, user, rack_id, expected, desired):
+    if (expected or desired).get("metadata_only"):
+        return _apply_metadata_change(db, user, rack_id, expected, desired)
     cable_id = (expected or desired)["id"]
     action = "add" if expected is None else "delete" if desired is None else "change"
     allowed = _allowed_cables(db, user, action)
@@ -375,6 +475,24 @@ def _apply_cable_change(db, user, rack_id, expected, desired):
         raise CableEditError("The original cable state is no longer valid in NetBox.", 409)
 
 
+def _apply_metadata_change(db, user, rack_id, expected, desired):
+    cable, ends, allowed = _lock_rack_cable_metadata(db, user, rack_id, expected["id"])
+    if _cable_snapshot(db, cable, ends, metadata_only=True) != expected:
+        raise CableEditError("This cable has changed since the recorded operation.", 409)
+    tags = None
+    changed_tags = set(expected["tags"]) ^ set(desired["tags"])
+    if changed_tags:
+        if available_tags(db, user, Cable).filter(pk__in=changed_tags).count() != len(changed_tags):
+            raise CableEditError("A tag from the recorded change is no longer available.", 409)
+        tags = list(Tag.objects.using(db).filter(pk__in=desired["tags"]))
+    cable.snapshot()
+    for name, value in desired["fields"].items():
+        setattr(cable, name, deepcopy(value))
+    _save_cable(db, cable, allowed, tags=tags)
+    if _cable_snapshot(db, cable, metadata_only=True) != desired:
+        raise CableEditError("The original cable details are no longer valid in NetBox.", 409)
+
+
 def _batch_operations(data):
     operations = data.get("operations")
     if not isinstance(operations, list) or not 1 <= len(operations) <= MAX_BATCH_OPERATIONS:
@@ -411,12 +529,18 @@ def _mutate(db, user, rack_id, data):
         record_history(db, journal, changes, " · ".join(labels))
         return {"ids": ids, "history": history_payload(journal)}, 200
 
+    if action == "update":
+        cable, before, after = _edit_cable_metadata(db, user, rack_id, data)
+        if before != after:
+            record_history(db, journal, [{"before": before, "after": after}], f"Updated cable #{cable.pk}")
+        return {
+            "id": cable.pk, "history": history_payload(journal),
+            "cable": {**cable_details(cable), "tags": visible_tags(db, user, cable)},
+        }, 200
+
     change = _edit_cable(db, user, rack_id, data)
     before, after = change["before"], change["after"]
-    if action == "update":
-        label = "Updated cable"
-    else:
-        label = "Created cable" if before is None else "Deleted cable" if after is None else "Moved cable"
+    label = "Created cable" if before is None else "Deleted cable" if after is None else "Moved cable"
     if before != after:
         record_history(db, journal, [change], f"{label} #{(after or before)['id']}")
     return {"id": (after or before)["id"], "history": history_payload(journal)}, 201 if before is None else 200
@@ -442,7 +566,7 @@ def mutate_cable(request, pk):
     except Exception as exc:
         # NetBox queues events in memory. They must be discarded after any rollback.
         clear_events.send(sender=Cable)
-        if isinstance(exc, (CableEditError, HistoryConflictError)):
+        if isinstance(exc, (CableEditError, HistoryConflictError, TagEditError)):
             return JsonResponse({"error": str(exc)}, status=exc.status)
         if isinstance(exc, (ValidationError, AbortRequest)):
             return JsonResponse({"error": "NetBox rejected this cable operation."}, status=409)

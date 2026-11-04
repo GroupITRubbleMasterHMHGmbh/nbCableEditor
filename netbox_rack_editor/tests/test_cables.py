@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.conf import settings
 from django.test import Client
 from django.urls import reverse
 
@@ -63,6 +64,22 @@ class CableEditorTestCase(TestCase):
 
     def jump(self, target, revision):
         return self.post({"action": "history", "target": target, "revision": revision})
+
+    def test_cable_labels_are_english_on_a_german_netbox(self):
+        self.client.cookies[settings.LANGUAGE_COOKIE_NAME] = "de"
+        self.add_permissions("dcim.add_cable", "dcim.change_cable")
+        created = self.edit(self.a, self.b)
+        self.assertEqual(created.status_code, 201, created.content)
+        updated = self.update_details(created.json()["id"], label="Verbindung 1")
+        self.assertEqual(updated.status_code, 200, updated.content)
+        self.assertEqual(updated.json()["cable"]["status"], "Connected")
+        self.assertEqual(updated.json()["cable"]["label"], "Verbindung 1")
+
+        response = self.client.get(reverse("plugins:netbox_rack_editor:rack", args=[self.rack.pk]))
+        self.assertEqual(response.headers["Content-Language"], "de")
+        rack_data = response.context["rack_data"]
+        self.assertEqual(rack_data["cables"][0]["status"], "Connected")
+        self.assertIn({"value": LinkStatusChoices.STATUS_CONNECTED, "label": "Connected"}, rack_data["cableStatuses"])
 
     def test_create_then_move_cable(self):
         self.add_permissions("dcim.add_cable", "dcim.change_cable")
@@ -186,7 +203,7 @@ class CableEditorTestCase(TestCase):
         response = self.edit(interface, self.a)
         self.assertEqual(response.status_code, 201, response.content)
 
-    def test_passive_port_mutations_require_visible_same_rack_ports(self):
+    def test_passive_port_topology_changes_require_visible_same_rack_ports(self):
         self.add_permissions("dcim.add_cable", "dcim.change_cable", "dcim.delete_cable")
         front = FrontPort.objects.create(device=self.second, name="Front", type=PortTypeChoices.TYPE_8P8C)
         marked = RearPort.objects.create(
@@ -201,7 +218,7 @@ class CableEditorTestCase(TestCase):
         cable = Cable.objects.create(a_terminations=[front], b_terminations=[external])
         self.assertEqual(self.edit(front, self.a, cable.pk).status_code, 404)
         self.assertEqual(self.delete(cable.pk).status_code, 404)
-        self.assertEqual(self.update_details(cable.pk, label="Outside rack").status_code, 404)
+        self.assertEqual(self.update_details(cable.pk, label="Outside rack").status_code, 200)
         self.assertEqual(Cable.objects.get(pk=cable.pk).b_terminations, [external])
 
     def test_create_rejects_invalid_cable_details(self):
@@ -212,6 +229,13 @@ class CableEditorTestCase(TestCase):
             {"color": False},
             {"label": "a" * 101},
             {"label": "patch\x00label"},
+            {"length": "2"},
+            {"length": "2", "length_unit": "invalid"},
+            {"length": "-1", "length_unit": "m"},
+            {"length": True, "length_unit": "m"},
+            {"length": "NaN", "length_unit": "m"},
+            {"length": "1.001", "length_unit": "m"},
+            {"length": "1000", "length_unit": "km"},
         ):
             with self.subTest(details=details):
                 response = self.edit(self.a, self.b, **details)
@@ -223,10 +247,12 @@ class CableEditorTestCase(TestCase):
         original = {
             "label": "Lab patch", "type": CableTypeChoices.TYPE_CAT6, "color": "202020",
             "status": LinkStatusChoices.STATUS_CONNECTED, "description": "Original description",
+            "length": Decimal("2.50"), "length_unit": "m",
         }
         updated = {
             "label": "Planned patch", "type": CableTypeChoices.TYPE_CAT6A, "color": "1e3aff",
             "status": LinkStatusChoices.STATUS_PLANNED, "description": "Replacement description",
+            "length": Decimal("300.00"), "length_unit": "cm",
         }
         cable = Cable.objects.create(
             a_terminations=[self.a], b_terminations=[self.b],
@@ -270,6 +296,35 @@ class CableEditorTestCase(TestCase):
         redo = self.jump(1, undo.json()["history"]["revision"])
         self.assertEqual(redo.status_code, 200, redo.content)
         assert_state(updated)
+
+    def test_cable_length_survives_creation_history_and_can_be_cleared(self):
+        self.add_permissions("dcim.add_cable", "dcim.change_cable", "dcim.delete_cable")
+        created = self.edit(self.a, self.b, length="3", length_unit="ft")
+        self.assertEqual(created.status_code, 201, created.content)
+        cable = Cable.objects.get(pk=created.json()["id"])
+        self.assertEqual(cable.length, Decimal("3.00"))
+        self.assertEqual(cable.length_unit, "ft")
+        undo = self.jump(0, created.json()["history"]["revision"])
+        self.assertEqual(undo.status_code, 200, undo.content)
+        self.assertFalse(Cable.objects.filter(pk=cable.pk).exists())
+        redo = self.jump(1, undo.json()["history"]["revision"])
+        self.assertEqual(redo.status_code, 200, redo.content)
+        cable.refresh_from_db()
+        self.assertEqual(cable.length, Decimal("3.00"))
+        self.assertEqual(cable.length_unit, "ft")
+        self.assertEqual(cable._abs_length, Decimal("0.9144"))
+
+        cleared = self.update_details(cable.pk, length=None)
+        self.assertEqual(cleared.status_code, 200, cleared.content)
+        cable.refresh_from_db()
+        self.assertIsNone(cable.length)
+        self.assertIsNone(cable.length_unit)
+        self.assertIsNone(cable._abs_length)
+        restore = self.jump(1, cleared.json()["history"]["revision"])
+        self.assertEqual(restore.status_code, 200, restore.content)
+        cable.refresh_from_db()
+        self.assertEqual(cable.length, Decimal("3.00"))
+        self.assertEqual(cable.length_unit, "ft")
 
     def test_update_details_validate_and_allow_partial_noop_edits(self):
         self.add_permissions("dcim.change_cable")
@@ -317,11 +372,80 @@ class CableEditorTestCase(TestCase):
         external = Cable.objects.create(
             a_terminations=[self.replacement], b_terminations=[self.external_port], label="Allowed",
         )
-        denied = self.update_details(external.pk, description="Changed")
+        updated = self.update_details(external.pk, description="Remote rack link")
+        self.assertEqual(updated.status_code, 200, updated.content)
+        self.assertEqual(updated.json()["cable"]["description"], "Remote rack link")
+        self.assertEqual(self.jump(0, updated.json()["history"]["revision"]).status_code, 200)
+        external.refresh_from_db()
+        self.assertEqual(external.description, "")
+        self.assertEqual(external.b_terminations, [self.external_port])
+
+        denied = self.client.post(
+            reverse("plugins:netbox_rack_editor:cables", args=[self.other_rack.pk]),
+            {"action": "update", "cable_id": cable.pk, "description": "Changed"}, content_type="application/json",
+        )
         self.assertEqual(denied.status_code, 404, denied.content)
         self.remove_permissions("dcim.view_cable")
         denied = self.update_details(cable.pk, description="Changed")
         self.assertEqual(denied.status_code, 404, denied.content)
+
+    def test_metadata_autosave_preserves_unreadable_tags_and_records_undo(self):
+        self.add_permissions("dcim.change_cable")
+        old = Tag.objects.create(name="Original tag", slug="original-tag")
+        new = Tag.objects.create(name="Replacement tag", slug="replacement-tag", color="abc123")
+        hidden = Tag.objects.create(name="Private tag", slug="private-tag")
+        wrong_type = Tag.objects.create(name="Interface only", slug="interface-only")
+        wrong_type.object_types.add(ObjectType.objects.get_for_model(Interface))
+        permission = ObjectPermission.objects.create(
+            name="Read selected tags", actions=["view"], constraints={"pk__in": [old.pk, new.pk, wrong_type.pk]},
+        )
+        permission.object_types.add(ObjectType.objects.get_for_model(Tag))
+        permission.users.add(self.user)
+        cable = Cable.objects.create(a_terminations=[self.a], b_terminations=[self.b], label="Original", comments="Old")
+        cable.tags.add(old, hidden)
+        for details in ({"tags": [hidden.pk]}, {"tags": [wrong_type.pk]}, {"comments": "bad\x00text"}):
+            response = self.update_details(cable.pk, **details)
+            self.assertEqual(response.status_code, 400, response.content)
+
+        tag_only = self.update_details(cable.pk, tags=[new.pk], expected_tags=[old.pk])
+        self.assertEqual(tag_only.status_code, 200, tag_only.content)
+        self.assertEqual(tag_only.json()["cable"]["tags"], [{"id": new.pk, "name": new.name, "color": new.color}])
+        self.assertEqual(tag_only.json()["cable"]["comments"], "Old")
+        self.assertEqual(set(cable.tags.values_list("pk", flat=True)), {new.pk, hidden.pk})
+        stale = self.update_details(cable.pk, tags=[], expected_tags=[old.pk])
+        self.assertEqual(stale.status_code, 409, stale.content)
+        comment = self.update_details(cable.pk, comments="New\n\nCable notes")
+        self.assertEqual(comment.status_code, 200, comment.content)
+        self.assertEqual(comment.json()["cable"]["comments"], "New\n\nCable notes")
+        self.assertEqual(comment.json()["cable"]["label"], "Original")
+
+        undo = self.jump(0, comment.json()["history"]["revision"])
+        self.assertEqual(undo.status_code, 200, undo.content)
+        cable.refresh_from_db()
+        self.assertEqual(cable.comments, "Old")
+        self.assertEqual(set(cable.tags.values_list("pk", flat=True)), {old.pk, hidden.pk})
+        redo = self.jump(2, undo.json()["history"]["revision"])
+        self.assertEqual(redo.status_code, 200, redo.content)
+        cable.refresh_from_db()
+        self.assertEqual(cable.comments, "New\n\nCable notes")
+        self.assertEqual(set(cable.tags.values_list("pk", flat=True)), {new.pk, hidden.pk})
+        self.assertEqual(cable.a_terminations, [self.a])
+        self.assertEqual(cable.b_terminations, [self.b])
+
+    def test_metadata_autosave_keeps_complex_cable_topology(self):
+        self.add_permissions("dcim.change_cable", "dcim.delete_cable")
+        cable = Cable.objects.create(
+            a_terminations=[self.a], b_terminations=[self.external_port], profile=CableProfileChoices.SINGLE_1C2P,
+        )
+        ends = list(cable.terminations.values_list("pk", "termination_id", "connector", "positions"))
+        saved = self.update_details(cable.pk, comments="Two-position cable")
+        self.assertEqual(saved.status_code, 200, saved.content)
+        self.assertEqual(self.delete(cable.pk).status_code, 409)
+        undo = self.jump(0, saved.json()["history"]["revision"])
+        self.assertEqual(undo.status_code, 200, undo.content)
+        cable.refresh_from_db()
+        self.assertEqual(cable.comments, "")
+        self.assertEqual(list(cable.terminations.values_list("pk", "termination_id", "connector", "positions")), ends)
 
     def test_create_rejects_occupied_and_nonphysical_interfaces(self):
         self.add_permissions("dcim.add_cable")

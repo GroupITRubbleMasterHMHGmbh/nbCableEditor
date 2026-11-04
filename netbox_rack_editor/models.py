@@ -5,9 +5,24 @@ from django.db.models import Q
 
 class LayoutRevision(models.Model):
     device_type = models.OneToOneField(
-        "dcim.DeviceType", on_delete=models.CASCADE, related_name="+"
+        "dcim.DeviceType", on_delete=models.CASCADE, related_name="+", blank=True, null=True,
+    )
+    module_type = models.OneToOneField(
+        "dcim.ModuleType", on_delete=models.CASCADE, related_name="+", blank=True, null=True,
     )
     revision = models.PositiveBigIntegerField(default=0)
+    design = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(device_type__isnull=False, module_type__isnull=True)
+                    | Q(device_type__isnull=True, module_type__isnull=False)
+                ),
+                name="rack_editor_layout_owner",
+            ),
+        ]
 
 
 class PortPlacement(models.Model):
@@ -27,6 +42,7 @@ class PortPlacement(models.Model):
     face = models.CharField(max_length=5, choices=Face.choices)
     x = models.FloatField()
     y = models.FloatField()
+    label = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         constraints = [

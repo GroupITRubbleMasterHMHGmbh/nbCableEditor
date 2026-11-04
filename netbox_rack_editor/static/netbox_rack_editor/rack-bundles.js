@@ -70,7 +70,7 @@
     return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   }
 
-  function labelPoint(points, bounds, halfWidth, forbidden) {
+  function labelPoint(points, bounds, halfWidth, halfHeight, forbidden) {
     const segments = points.slice(1).map((to, i) => {
       const from = points[i];
       return {from, to, length: Math.hypot(to.x - from.x, to.y - from.y)};
@@ -85,9 +85,9 @@
           continue;
         }
         const x = clamp(from.x + (to.x - from.x) * distance / length, halfWidth + 1, bounds.width - halfWidth - 1);
-        const y = clamp(from.y + (to.y - from.y) * distance / length, HALF_BADGE_HEIGHT + 1, bounds.height - HALF_BADGE_HEIGHT - 1);
+        const y = clamp(from.y + (to.y - from.y) * distance / length, halfHeight + 1, bounds.height - halfHeight - 1);
         const box = {left: x - halfWidth - 2, right: x + halfWidth + 2,
-          top: y - HALF_BADGE_HEIGHT - 2, bottom: y + HALF_BADGE_HEIGHT + 2};
+          top: y - halfHeight - 2, bottom: y + halfHeight + 2};
         const collisions = forbidden.filter(area => intersects(area, box)).length;
         if (!best || collisions < best.collisions) best = {x, y, box, collisions};
         break;
@@ -97,19 +97,24 @@
     return best;
   }
 
-  function draw(layer, groups, obstacles, bounds, {onSelect, describe, label, keyboard = false, protectedAreas = []} = {}) {
+  function draw(layer, groups, obstacles, bounds, {
+    onSelect, describe, label, keyboard = false, protectedAreas = [], scale = 1, deviceClearance = 0,
+  } = {}) {
     const document = layer.ownerDocument;
     const cards = new Map(obstacles.map(card => [card.id, card]));
     const connections = groups.map(bundle => ({
       id: bundle.key, a: anchor(bundle.a, bundle.b, cards, -1), b: anchor(bundle.b, bundle.a, cards, 1),
     }));
-    const paths = globalThis.NetBoxRackRouting.routeCables(connections, obstacles, bounds, protectedAreas, {strategy: "pcb", spacing: 12});
+    const paths = globalThis.NetBoxRackRouting.routeCables(connections, obstacles, bounds, protectedAreas,
+      {strategy: "pcb", spacing: 12, deviceClearance});
     const fragment = document.createDocumentFragment();
     const labelObstacles = [...obstacles, ...protectedAreas];
     for (const bundle of groups) {
       const points = paths.get(bundle.key);
       if (!points || points.length < 2) continue;
-      const cornerObstacles = obstacles.filter(card => card.id !== bundle.a.device && card.id !== bundle.b.device);
+      const pad = Math.max(0, deviceClearance - 2);
+      const cornerObstacles = obstacles.filter(card => card.id !== bundle.a.device && card.id !== bundle.b.device)
+        .map(({left, right, top, bottom}) => ({left: left - pad, right: right + pad, top: top - pad, bottom: bottom + pad}));
       const smooth = globalThis.NetBoxRackCablePath?.roundPath(points, [...cornerObstacles, ...protectedAreas]);
       const d = smooth?.d ?? pathData(points);
       const groupElement = svg(document, "g", {class: "re-rack-bundle", "data-cable-bundle": bundle.key});
@@ -136,15 +141,16 @@
         svg(document, "path", {class: "re-rack-bundle-line", d}));
       if (onSelect) groupElement.append(svg(document, "path", {class: "re-rack-bundle-hit", d}));
       for (const end of [points[0], points.at(-1)]) {
-        groupElement.append(svg(document, "circle", {class: "re-rack-bundle-anchor", cx: end.x, cy: end.y, r: 3}));
+        groupElement.append(svg(document, "circle", {class: "re-rack-bundle-anchor", cx: end.x, cy: end.y, r: 3 * scale}));
       }
       const count = String(label?.(bundle) ?? bundle.ids.length);
-      const halfWidth = Math.max(10, count.length * 3.5 + 5);
-      const position = labelPoint(smooth?.points ?? points, bounds, halfWidth, labelObstacles);
+      const halfWidth = Math.max(10, count.length * 3.5 + 5) * scale;
+      const halfHeight = HALF_BADGE_HEIGHT * scale;
+      const position = labelPoint(smooth?.points ?? points, bounds, halfWidth, halfHeight, labelObstacles);
       if (position) {
         const {x, y, box} = position;
         groupElement.append(svg(document, "rect", {class: "re-rack-bundle-badge",
-          x: x - halfWidth, y: y - HALF_BADGE_HEIGHT, width: halfWidth * 2, height: HALF_BADGE_HEIGHT * 2, rx: 9}));
+          x: x - halfWidth, y: y - halfHeight, width: halfWidth * 2, height: halfHeight * 2, rx: 9 * scale}));
         const text = svg(document, "text", {class: "re-rack-bundle-count",
           x, y, "text-anchor": "middle", "dominant-baseline": "central"});
         text.textContent = count;

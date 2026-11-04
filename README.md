@@ -1,66 +1,70 @@
 # NetBox Rack Cable Editor
 
-NetBox-Plugin für die grafische Verkabelung im Rack. Der Editor zeigt die Vorder- und Rückseiten der Geräte mit ihren Bildern und Ports. Kabel lassen sich direkt im Bild anlegen, umstecken und verfolgen.
+Design device faces and manage rack cabling directly in NetBox. Place ports on device images or custom drawings, connect and move cables in the rack view, and trace links through patch panels to wall outlets and endpoints.
 
-Version **0.10.10** ist für **NetBox 4.5.10 und neuere 4.5-Versionen** ausgelegt. Das Plugin verwendet das Python-Environment von NetBox und benötigt mindestens **Python 3.12**.
+Version **0.10.32** supports **NetBox 4.5.10 and later 4.5 releases** and requires **Python 3.12 or later** in the NetBox environment.
 
-- [Installation und Updates für bestehende NetBox-Instanzen](docs/installation.md)
-- [Lokale Docker-Demo](#lokale-docker-demo)
+- [Installation and upgrades](docs/installation.md)
+- [Local Docker demo](#local-docker-demo)
 
-![Rack-Ansicht mit Switches, Patchpanel und farbigen Kabeln](docs/screenshots/rack-cable-focus.png)
+![Rack view focused on the cables connected to the patch panel](docs/screenshots/rack-cable-focus.png)
 
-Der Kabelfokus zeigt die direkten Verbindungen des Patchpanels. Die übrigen belegten Ports erscheinen grau.
+The device cable filter shows the patch panel's direct connections and dims occupied ports on unrelated links.
 
-## Portpositionen am Gerätetyp festlegen
+## Design device and module layouts
 
-1. Am **Device Type** Front- und Rückbild hinterlegen. Für einen Switch **Interface Templates** anlegen. Bei Patchpanels die Buchsen als **Front Port Templates** und **Rear Port Templates** mit nativen NetBox-Portzuordnungen modellieren.
-2. Am Gerätetyp **Port layout** öffnen und **Front** oder **Rear** wählen. Passive Buchsen werden auf der Seite ihres Porttyps platziert.
-3. **First port** und **Last port** auswählen. Für 48 Ports in zwei Reihen unter **Columns** den Wert `24` setzen. Mit **Numbering** festlegen, ob die Reihen oder die Spalten zuerst durchnummeriert werden.
-4. Mit der Maus ein Rechteck über dem Portfeld aufziehen. Der Editor verteilt die Marker gleichmäßig. **Place centered** platziert die Auswahl ohne Ziehen. Einzelne Marker lassen sich anschließend verschieben oder entfernen.
-5. **Save layout** wählen. Das Layout gilt für alle Geräte dieses Typs, die entsprechende Ports haben. Ports ohne Position sind im **Interface directory** verfügbar.
+1. Create the port templates on a NetBox **Device Type** or **Module Type**. Use **Front Port Templates** and **Rear Port Templates** for passive jacks.
+2. Open **Layout editor** and choose **Front** or **Rear**. Use **Use type image** to control the background on each face. Add custom artwork with **Text** or **Rectangle**. Rectangles support an optional fill and a label embedded in the frame, with corner, edge, vertical, and centered positions. Set the font family, size, and color for each text item.
+3. Use **Single port** to place an individual port. With **Port grid**, choose a port range, set rows, columns, and numbering order, then drag the grid on the drawing. A 48-port switch can use 2 rows and 24 columns. Edit port labels individually or apply numbering to a group.
+4. Use **Field → Insert** to add a standard field or an accessible NetBox custom field to a text item or rectangle label. The layout preview uses sample values. The rack shows the actual values the user has permission to see.
+5. Use **Module bay** to draw a region for a NetBox module bay template. The rack shows the installed module's artwork and ports within that region. For module type images, add NetBox image attachments named `Front` and `Rear`.
+6. Select **Save layout**. The layout applies to all instances of the type. Ports without a position remain available in the **Interface directory**.
 
-![Portlayout eines Switches mit 48 nummerierten Ports in zwei Reihen](docs/screenshots/port-layout.png)
+Use **Select** to draw a selection box. Hold **Shift** while dragging to extend the selection, or use **Ctrl**/**⌘**-click to toggle individual ports. Move the selection together or use **Align** to arrange it in a row, column, or grid. Enable **Grid** or **Objects** under **Snap** for alignment guides. Hold **Alt** to bypass snapping while dragging. **Undo** and **Redo** cover the current editing session on both faces.
 
-## Kabel im Rack bearbeiten
+![Device layout editor showing the switch's 48 ports in two rows](docs/screenshots/port-layout.png)
 
-Am Rack **Cable editor** öffnen. Unter **View** zwischen **Front**, **Rear** und **Both** wechseln.
+## Work with cables in a rack
 
-| Aufgabe | Bedienung |
+Open a rack in NetBox and select **Cable editor**. Use **View** to switch between **Front**, **Rear**, and **Both**, control device image opacity, and select the zoom and routing strategy. **Zoom → Fit** scales the drawing to the available space. Free ports have two green lines, while connected ports have a closed amber outline. Port labels stay inside the outline and wrap when that allows larger text.
+
+| Task | How to do it |
 | --- | --- |
-| Kabel anlegen | Einen freien Port auf einen anderen freien Port ziehen. Im Dialog können Kabeltyp, Beschriftung und Farbe angegeben werden. |
-| Kabel umstecken | Ein belegtes Ende am Port oder am kleinen Griff auf der Linie anfassen, auf einen freien Port ziehen und bestätigen. Kabel-ID und Metadaten bleiben erhalten. |
-| Kabel prüfen oder bearbeiten | Beim Überfahren der Linie werden beide Enden angezeigt. Klick öffnet die Details. Im Kontextmenü stehen je nach Berechtigung Bearbeiten, Farbwechsel und Löschen mit Bestätigung zur Verfügung. |
-| Mehrere Kabel bearbeiten | Mit **Quick connect** Verbindungen oder mit **Unplug** Löschungen vormerken. **Apply batch** schreibt die Änderungen gemeinsam. **Discard** verwirft die Warteschlange. |
-| Änderungen wiederherstellen | **Undo** und **Redo** gehen schrittweise durch die eigenen Bearbeitungen an diesem Rack. Unter **History** lässt sich ein gespeicherter Stand auswählen. Änderungen durch andere Personen oder andere NetBox-Oberflächen können die Wiederherstellung eines betroffenen Kabels blockieren. |
-| Kabel eines Geräts eingrenzen | Das Filtersymbol neben dem Gerätenamen wählen. Die Ansicht zeigt nur Kabel mit einem direkten Anschluss an diesem Gerät. Andere Geräte bleiben sichtbar und ihre belegten, nicht zugehörigen Ports werden abgeblendet. **Cables: … ×** hebt den Filter auf. **Devices** steuert separat, welche Geräte die Rackansicht zeigt. |
-| Kabelwege darstellen | Unter **View → Routing strategy** zwischen **Balanced** und **PCB-style** wechseln. **PCB-style** nutzt breitere Zwischenräume und abgerundete Kabelbahnen neben, über und unter den Geräten. Die virtuellen Abstände lassen sich mit **+ / −** einstellen. |
-| Kabel bündeln | **View → Lines → Bundles** zeigt pro Gerätepaar und Rackseite eine Bahn mit Kabelanzahl. Ein Klick auf die Bahn oder die Schaltfläche für das Paar zeigt die Einzelkabel und Ports. **Show all bundles** öffnet wieder die Übersicht. Im Druck verknüpft eine Bündelnummer den Plan mit der Portliste. |
-| Kabel verfolgen | Beim Überfahren eines Kabels oder belegten Ports stehen Zielgerät und Zielport oben. Der Tooltip zeigt Zwischenstationen, offene Buchsen und Wege, die nur teilweise sichtbar sind. Die Kabeldetails zeigen die vollständige für dich sichtbare Folge der Anschlüsse. |
-| Plan ausgeben | **Export plan** übernimmt die aktuelle Rackansicht. Für PNG ist die längste Bildkante wählbar. **Print / Save as PDF** entzerrt die Kabelverläufe für den Druck und bietet Papierformat und Ausrichtung zur Wahl. Die optionale Kabelliste gruppiert die passenden Verbindungen nach Gerätepaar. Nummern im Plan verweisen auf die entsprechenden Zeilen. |
-| Ports eingrenzen | **Port rows** blendet einzelne Portreihen aus. Unter **Interfaces** lassen sich freie oder belegte Anschlüsse hervorheben. Die VLAN-Suche unterscheidet **Any**, **Tagged** und **Untagged**. |
+| Connect two ports | Drag from a free port to another free port. Set the cable type, color, label, and optional length with its unit. The dialog prefills the previous type and color. Press **Enter** to submit. |
+| Move a cable end | Drag the connected port or the handle on the cable to a free port and confirm. The cable keeps its ID and metadata. |
+| Inspect or edit a cable | Click a cable to see its endpoints, VLANs, port types, PoE, connection status, and trace. With change permission, edit color, length, label, description, tags, and comments in the dialog. Text fields save on blur or **Enter**, and comments save with **Ctrl+Enter**. Colors and tags save on selection. |
+| Use cable and port actions | Right-click a cable or port to open its context menu. The menu shows the actions available for that item and your permissions. |
+| Connect or unplug in batches | Use **Quick connect** to stage pairs or **Unplug** to stage removals. **Apply batch** saves the queued changes together. **Discard** clears the queue. |
+| Restore an earlier state | Use **Undo** and **Redo** to step through your changes to the rack, or select a checkpoint in **History**. An edit to the same cable from another user or NetBox screen can prevent that cable from being restored. |
+| Focus on one device | Click the filter icon beside a device name to show its direct connections. Click the **Cables** chip to clear the filter. Use **Devices** to choose which devices are visible and **Port rows** to hide individual rows. |
+| Choose how cables are drawn | Use **View → Routing strategy** to choose **Balanced** or **PCB-style**. Both use space around and between devices. PCB-style uses rounded turns. Adjust the virtual gaps between devices with **+** and **−**. |
+| Bundle cables | Use **View → Lines → Bundles** to group cables by device pair and rack face. Select a bundle to show its individual cables. **Show all bundles** returns to the overview. |
+| Inspect ports and VLANs | Double-click a port or choose **Port details** in its context menu. View the port type, VLANs, PoE, status, and any connected endpoint. The dialog links to native NetBox objects and supports editing the NetBox label and tags with change permission. |
+| Find usable ports | Use **View → Interfaces** to highlight free or used ports. Filter by a VLAN ID and choose **Any**, **Tagged**, or **Untagged**. In **Port fill → Untagged VLAN**, the fill represents the VLAN and the outline shows connection status. Color rules use the first match, then the VLAN's `editorColorHex` value or the optional fallback color. |
+| Print or export | Select **Export** to create a PNG with a chosen longest edge, or choose **Print / Save as PDF** to set the paper size and orientation. The print layout gives cable routes more space and can include a compact cable list grouped by device pair, with reference numbers in the plan. |
 
-Das **Interface directory** unterscheidet bei Interfaces den Aktivierungszustand und die Belegung. Bei passiven Buchsen zeigt es Porttyp und Belegung. Über **Fields** lassen sich zusätzliche Angaben in der Port- und Verbindungsliste einblenden. Für Aktionen stehen auch Klick, Kontextmenü und Tastatur zur Verfügung.
+Hover over a cable or a connected port to see its destination, even with **Selected only** enabled or when the other device is hidden. Hover over or select an entry in **Connections** to highlight its cable in the drawing. The **Interface directory** shows port status and the connected peer. Use **Fields** in either list to choose which details appear. The browser remembers view options, including zoom, panel visibility, and **Trim width to visible ports**.
 
-### Patchpanels, Wanddosen und Reichweite
+### Trace patch panels and wall outlets
 
-Kabel, Geräte, Ports und Bilder sind native NetBox-Objekte. Das Plugin speichert die Portpositionen und den persönlichen Kabelverlauf pro Rack. Es bearbeitet einfache 1:1-Kabel zwischen unterstützten Interfaces, Front Ports und Rear Ports im selben Rack. Bei berechtigten Leserechten kann die Vorschau einer Strecke über native Portzuordnungen bis zur Wanddose oder zum Endgerät außerhalb des Racks führen. Für rackübergreifende Kabel und komplexe Kabelprofile erfolgt die Bearbeitung in der normalen NetBox-Oberfläche.
+The editor works with native NetBox devices, ports, cables, and images. It stores layouts for device and module types and tracks personal cable history per rack. It edits direct, one-to-one cables between supported interfaces, front ports, and rear ports in the same rack. Traces follow native port mappings through patch panels to a wall outlet or endpoint outside the rack when the user has permission to view that path. Use NetBox for edits to inter-rack cables and complex cable profiles.
 
-![Kabeldetails mit Verlauf von Switch A über Patchpanel und Wanddose bis zum Access Point](docs/screenshots/cable-trace.png)
+![Cable details tracing Switch A through a patch panel and wall outlet to an access point](docs/screenshots/cable-trace.png)
 
-Welche Geräte, Ports, Kabel und VLANs sichtbar sind, hängt von den NetBox-Objektrechten ab. Die [Übersicht zu Berechtigungen](docs/installation.md#berechtigungen) listet die Rechte für Layout und Verkabelung.
+See the [permissions guide](docs/installation.md#permissions) for the required NetBox object permissions.
 
-## Lokale Docker-Demo
+## Local Docker demo
 
-Die Compose-Datei unter `dev/` verwendet das Plugin direkt aus diesem Ordner und bindet NetBox an **127.0.0.1:8096**. Der Stack enthält Entwicklungskennwörter und ist für die lokale Demo gedacht. Für parallele Demos aus verschiedenen Checkouts sind ein eigener Compose-Projektname und ein eigener Host-Port erforderlich. Projektname und Port stehen in `dev/compose.yaml`.
+The Compose stack mounts the plugin from the checkout and serves NetBox at [localhost:8096](http://localhost:8096/). The demo uses local development credentials. For concurrent demos from separate checkouts, assign each one its own Compose project name and host port.
 
-Die Demo im Hauptordner dieses Repositories starten.
+From the repository root, start NetBox and follow its startup logs.
 
 ```sh
 docker compose -f dev/compose.yaml up -d
 docker compose -f dev/compose.yaml logs -f netbox
 ```
 
-Sobald die Anmeldeseite unter [localhost:8096](http://localhost:8096/) erreichbar ist, die Logansicht mit `Ctrl+C` verlassen und Folgendes ausführen. `createsuperuser` fragt nach den Zugangsdaten für die lokale Instanz.
+When the login page is available, press **Ctrl+C** to leave the log view. Collect the static files, create a local superuser, and load the sample rack.
 
 ```sh
 docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py collectstatic --no-input
@@ -68,23 +72,25 @@ docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/
 docker compose -f dev/compose.yaml exec netbox sh -c "/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < /plugin/dev/demo.py"
 ```
 
-In NetBox **Lab Rack 01** öffnen und **Cable editor** wählen. Die Demo enthält **Switch A**, **Switch B** mit je 48 Ports und **Patchpanel PP-01**. Die Wanddosen und Endgeräte liegen im **Demo Büro** außerhalb des Racks.
+Open **Lab Rack 01** in NetBox and select **Cable editor**. The rack contains two 48-port switches and **Patch Panel PP-01**. The wall outlets and endpoints are in **Demo Office**, outside the rack.
 
-| Switch A | Patchpanel | Wanddose | Ende der Strecke | VLAN am Switch |
+| Switch A | Patch panel jack | Wall outlet | Endpoint | VLAN on the switch port |
 | --- | --- | --- | --- | --- |
-| Ethernet36 | P01 | WD-01 | Arbeitsplatz PC-01 | Untagged 50 |
-| Ethernet38 | P02 | WD-02 | Drucker PR-01 | Untagged 50 |
-| Ethernet42 | P03 | WD-03 | Access Point AP-01 | Tagged 50, Untagged 99 |
-| Ethernet46 | P04 | WD-04 | Offene Dose | Untagged 50 |
+| Ethernet36 | P01 | WD-01 | Workstation PC-01 | Untagged 50 |
+| Ethernet38 | P02 | WD-02 | Printer PR-01 | Untagged 50 |
+| Ethernet42 | P03 | WD-03 | Access Point AP-01 | Tagged 50, untagged 99 |
+| Ethernet46 | P04 | WD-04 | Open outlet | Untagged 50 |
 
-- **Strecke verfolgen.** Über Ethernet36, 38, 42 oder 46 fahren. Im Modus **Normal** öffnet ein Klick auf das Kabel die Details mit den Stationen. **VLAN 50 → Tagged** hebt den Switch-Port des Access Points hervor.
-- **Selbst verkabeln.** Die Buchsenpaare P05 und P06 sind in einer frischen Demo frei. Für ein Testkabel von der Switch-Front zur Rückseite des Patchpanels unter **View** die Option **Both** wählen. Über **Undo** lässt sich die Änderung rückgängig machen.
+- Hover over one of these switch ports to trace it. In **Normal** mode, click the cable to open the complete route. Search for VLAN `50` with **Tagged** selected to highlight the access point's switch port.
+- Jacks P05 and P06 are free in a fresh demo. Select **View → Both** to connect a free switch port to the rear of the patch panel. Use **Undo** to restore the previous state.
 
-Die Plugin-Tests laufen im Demo-Container. Die JavaScript-Tests verwenden lokal installiertes Node.js.
+Use `docker compose -f dev/compose.yaml stop` to pause the demo and `docker compose -f dev/compose.yaml start` to resume. The stack does not configure a persistent media volume for container rebuilds.
+
+## Run the tests
+
+Run the plugin tests in the demo container and the JavaScript tests with local Node.js.
 
 ```sh
 docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py test netbox_rack_editor
 node --test tests/*.test.cjs
 ```
-
-Die Demo mit `docker compose -f dev/compose.yaml stop` pausieren und mit `docker compose -f dev/compose.yaml start` wieder aufnehmen. Die bereitgestellte Demo verwendet keine dauerhafte Medienablage für einen Neuaufbau der Container.
