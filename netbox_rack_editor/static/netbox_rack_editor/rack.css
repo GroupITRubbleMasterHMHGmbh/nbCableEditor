@@ -103,6 +103,62 @@
   border-bottom: 1px solid var(--re-rack-border);
 }
 
+.re-rack-bundle-panel {
+  display: grid;
+  gap: .45rem;
+  padding: .6rem .8rem;
+  border-bottom: 1px solid var(--re-rack-border);
+  background: color-mix(in srgb, var(--re-rack-bg) 55%, var(--re-rack-surface));
+}
+
+.re-rack-bundle-panel-heading,
+.re-rack-bundle-groups {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .35rem .65rem;
+}
+
+.re-rack-bundle-panel-label,
+.re-rack-bundle-title {
+  margin: 0;
+  font-size: .82rem;
+  font-weight: 650;
+}
+
+.re-rack-bundle-title { overflow-wrap: anywhere; }
+
+.re-rack-bundle-status {
+  margin: 0;
+  color: var(--tblr-secondary-color, #576479);
+  font-size: .76rem;
+}
+
+.re-rack-bundle-panel-heading [data-bundle-clear] { margin-inline-start: auto; }
+
+.re-rack-bundle-cables {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+  gap: .3rem .45rem;
+  max-block-size: min(28vh, 11rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: .1rem;
+}
+
+.re-rack-bundle-panel :is(.re-rack-bundle-groups, .re-rack-bundle-cables) button {
+  max-width: 100%;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.re-rack-bundle-panel button[aria-pressed="true"] {
+  color: var(--tblr-primary, #0054a6);
+  border-color: currentColor;
+  background: var(--tblr-primary-lt, #e9f1fb);
+}
+
 .re-rack-filter-controls {
   position: relative;
   display: flex;
@@ -674,6 +730,61 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   overflow: visible;
   pointer-events: none;
 }
+
+.re-rack-bundle {
+  --re-rack-bundle-ink: color-mix(in srgb, var(--re-rack-text) 76%, var(--re-rack-surface));
+  --re-rack-bundle-focus: color-mix(in srgb, var(--re-rack-target) 60%, var(--re-rack-text));
+  outline: none;
+}
+
+.re-rack-bundle[role="button"]:is(:hover, :focus-visible, [aria-pressed="true"]) {
+  --re-rack-bundle-ink: var(--re-rack-bundle-focus);
+}
+
+.re-rack-bundle :is(.re-rack-bundle-line, .re-rack-bundle-casing, .re-rack-bundle-hit) {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.re-rack-bundle-line {
+  stroke: var(--re-rack-bundle-ink);
+  stroke-width: 4px;
+}
+
+.re-rack-bundle-casing {
+  stroke: var(--re-rack-surface);
+  stroke-width: 7px;
+}
+
+.re-rack-bundle-hit {
+  stroke: transparent;
+  stroke-width: 22px;
+}
+
+.re-rack-bundle-anchor {
+  fill: var(--re-rack-bundle-ink);
+  stroke: var(--re-rack-surface);
+  stroke-width: 1.5px;
+}
+
+.re-rack-bundle-badge {
+  fill: var(--re-rack-surface);
+  stroke: var(--re-rack-bundle-ink);
+  stroke-width: 1.5px;
+}
+
+.re-rack-bundle-count {
+  fill: var(--re-rack-bundle-ink);
+  font-size: 11px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.re-rack-bundle[role="button"] .re-rack-bundle-hit { pointer-events: stroke; cursor: pointer; }
+.re-rack-bundle[role="button"] .re-rack-bundle-badge { pointer-events: all; cursor: pointer; }
+.re-rack-bundle[role="button"]:focus-visible .re-rack-bundle-badge { stroke-width: 2.5px; }
 
 .re-rack-wire,
 .re-rack-wire-casing,

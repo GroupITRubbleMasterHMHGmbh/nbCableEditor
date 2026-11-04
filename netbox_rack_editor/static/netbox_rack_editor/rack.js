@@ -32,6 +32,13 @@
   const facePanels = Array.from(board.querySelectorAll("[data-rack-face-panel]"));
   const wires = get("wires");
   const lines = get("lines");
+  const bundlePanel = get("bundle-panel");
+  const bundlePairList = get("bundle-groups");
+  const bundleCableList = get("bundle-cables");
+  const bundleClear = get("bundle-clear");
+  let bundleGroups = [];
+  let expandedBundle = null;
+  let bundlePanelKey = "";
   const routingStrategy = get("routing-strategy");
   const interfaceHighlight = get("interface-highlight");
   const deviceImages = get("device-images");
@@ -139,6 +146,7 @@
   const definitions = document.createElementNS(SVG, "defs");
   definitions.append(mask);
   const wireLayer = document.createElementNS(SVG, "g");
+  const bundleLayer = document.createElementNS(SVG, "g");
   const traceLayer = document.createElementNS(SVG, "g");
   const traceMarkers = new Set();
   const traceTargets = new Set();
@@ -150,7 +158,7 @@
   for (const layer of [wireLayer, traceLayer, hoverLayer, handleLayer, previewLayer]) {
     layer.setAttribute("mask", "url(#" + mask.id + ")");
   }
-  wires.append(definitions, wireLayer, traceLayer, hoverLayer, handleLayer, previewLayer);
+  wires.append(definitions, bundleLayer, wireLayer, traceLayer, hoverLayer, handleLayer, previewLayer);
   const shownRoutes = new Map();
   const occupancyLabels = {free: "Free", cabled: "Cabled", marked: "Marked connected", other: "Other occupancy"};
 
@@ -577,7 +585,7 @@
   }
 
   function virtualGapSize(gap) {
-    return savedGaps.get(gap.key) ?? (routingStrategy.value === "pcb" ? pcbDefaultGap : defaultGap);
+    return savedGaps.get(gap.key) ?? (board.dataset.routingStrategy === "pcb" ? pcbDefaultGap : defaultGap);
   }
 
   function gapControl(gap, location) {
@@ -611,7 +619,7 @@
     if (!elevationSpacing) return;
     const {gaps, rows, cards, focused} = elevationSpacing;
     const scale = Number(zoom.value);
-    const defaultsVisible = focused || scale > 1 || routingStrategy.value === "pcb";
+    const defaultsVisible = focused || scale > 1 || board.dataset.routingStrategy === "pcb";
     const printGap = print ? Math.max(16, Math.min(96, 300 / gaps.length)) : 0;
     const beforeRow = new Map();
     const insideRow = new Map();
@@ -1019,9 +1027,14 @@
   }
 
   function visibleExportCableIds() {
-    return [...wireLayer.querySelectorAll("[data-wire-visual]")]
-      .map(path => Number(path.dataset.wireVisual))
-      .filter(id => cableButtons.has(id) && !cableButtons.get(id).hidden);
+    return [...new Set([
+      ...Array.from(wireLayer.querySelectorAll("[data-wire-visual]"), path => Number(path.dataset.wireVisual)),
+      ...collapsedBundleGroups().flatMap(group => group.ids),
+    ])].filter(id => cableButtons.get(id)?.hidden === false);
+  }
+
+  function collapsedBundleGroups() {
+    return lines.value === "bundles" && !expandedBundle ? bundleGroups : [];
   }
 
   function exportEndpoint(cable, end) {
@@ -1068,7 +1081,7 @@
       get("export-dimensions").textContent = result ? result.width + " × " + result.height + " px" : "";
     } else {
       const count = visibleExportCableIds().length;
-      get("export-count").textContent = count + (count === 1 ? " cable drawn" : " cables drawn") +
+      get("export-count").textContent = count + (count === 1 ? " cable represented" : " cables represented") +
         " in the plan and matching the current filters.";
     }
   }
@@ -1084,10 +1097,12 @@
     }
   }
 
-  function printRackSnapshot(references) {
+  function printRackSnapshot(references, bundleRefs) {
     const displayed = new Set([...wireLayer.querySelectorAll("[data-wire-visual]")].map(path => Number(path.dataset.wireVisual)));
-    if (!displayed.size) return globalThis.NetBoxRackExport.snapshot(board);
-    const bay = Math.min(80, 38 + displayed.size);
+    const groups = collapsedBundleGroups();
+    const bundled = new Set(groups.flatMap(group => group.ids));
+    if (!displayed.size && !bundled.size) return globalThis.NetBoxRackExport.snapshot(board);
+    const bay = Math.min(80, 38 + displayed.size + groups.length);
     const scrollLeft = scroll.scrollLeft;
     const scrollTop = scroll.scrollTop;
     board.removeAttribute("data-trimmed");
@@ -1097,10 +1112,11 @@
     board.dataset.printPlan = "";
     try {
       applyElevationSpacing(true);
-      const job = measureRouting(cable => displayed.has(cable.id), "pcb");
+      const job = measureRouting(cable => displayed.has(cable.id) || bundled.has(cable.id), "pcb");
       const origin = board.getBoundingClientRect();
       const titles = Array.from(board.querySelectorAll(".re-rack-device-name"), title => relativeRect(title, origin));
-      const paths = computeRoutes({...job, spacing: 12});
+      const paths = computeRoutes({...job, connections: job.connections.filter(({id}) => displayed.has(id)), spacing: 12});
+      const printGroups = globalThis.NetBoxRackBundles.group(job.connections.filter(({id}) => bundled.has(id)));
       for (const id of displayed) {
         if (paths.has(id)) continue;
         const cable = cables.get(id);
@@ -1115,6 +1131,14 @@
         const pathsLayer = document.createElementNS(SVG, "g");
         pathsLayer.setAttribute("mask", "url(#" + printMask.id + ")");
         svg.replaceChildren(definitions, pathsLayer);
+        if (printGroups.length) {
+          const printBundles = document.createElementNS(SVG, "g");
+          svg.insertBefore(printBundles, pathsLayer);
+          globalThis.NetBoxRackBundles.draw(printBundles, printGroups, job.obstacles, job.bounds, {
+            describe: bundleName, protectedAreas: job.protectedAreas,
+            label: group => bundleRefs.has(group.key) ? bundleRefs.get(group.key) + " · " + group.ids.length : String(group.ids.length),
+          });
+        }
         for (const [id, points] of paths) {
           const cable = cables.get(id);
           const shape = cableShape(points, cable.a, cable.b, job);
@@ -1168,7 +1192,15 @@
       refreshExportDrawing();
       const ids = visibleExportCableIds();
       const references = new Map(includeCables ? ids.toSorted((a, b) => a - b).map((id, index) => [id, index + 1]) : []);
-      const snapshot = await (png ? globalThis.NetBoxRackExport.snapshot(board) : printRackSnapshot(references));
+      const bundleRefs = new Map();
+      if (includeCables && !png) {
+        collapsedBundleGroups().forEach((group, index) => {
+          const ref = "B" + (index + 1);
+          bundleRefs.set(group.key, ref);
+          group.ids.forEach((id, position) => references.set(id, ref + "-" + (position + 1)));
+        });
+      }
+      const snapshot = await (png ? globalThis.NetBoxRackExport.snapshot(board) : printRackSnapshot(references, bundleRefs));
       const title = editor.querySelector("h1").textContent.trim();
       if (png) {
         const blob = await globalThis.NetBoxRackExport.png(snapshot, longest);
@@ -1233,6 +1265,10 @@
     refreshVlanMatches();
     filterDirectory();
     filterCableList();
+    if (lines.value === "bundles") {
+      drawnMode = null;
+      scheduleDraw();
+    }
     persistViewFilters();
   }
 
@@ -2174,7 +2210,8 @@
     const directoryPort = entry && directory.contains(entry) ? ports.get(portIdsByDataset.get(entry.dataset.portDirectoryId)) : null;
     const port = listedCable ? null : portAt(target) ?? directoryPort;
     const cable = listedCable ?? (port ? cables.get(port.cableId) : cableAt(event));
-    if (!cable || !cableMatchesDevice(cable)) {
+    const group = expandedBundle && bundleGroups.find(item => item.key === expandedBundle);
+    if (!cable || !cableMatchesDevice(cable) || (group && !group.ids.includes(cable.id))) {
       hideWireTooltip();
       return;
     }
@@ -2407,7 +2444,7 @@
   }
 
   function routeVisibleCables() {
-    const job = measureRouting(cableMatchesDevice, routingStrategy.value);
+    const job = measureRouting(cableMatchesDevice, board.dataset.routingStrategy);
     const {connections, obstacles, bounds, protectedAreas, strategy, cuts} = job;
     const key = JSON.stringify([connections, obstacles, bounds, protectedAreas, strategy]);
     if (key !== geometryKey) {
@@ -2433,17 +2470,96 @@
     return null;
   }
 
+  function bundleName(group) {
+    return [group.a, group.b].map(endpoint => {
+      const [id, face] = endpoint.device.split(":");
+      const device = data.devices.find(device => String(device.id) === id);
+      return (device?.name ?? id) + (rackFace === "both" ? " (" + face + ")" : "");
+    }).join(" ↔ ");
+  }
+
+  function chooseBundle(key, focusPanel = false) {
+    if (busy || pending || gesture || expandedBundle === key) return;
+    const focusKey = key ?? expandedBundle;
+    expandedBundle = key;
+    drawnMode = null;
+    selectCable(null);
+    if (focusPanel) {
+      requestAnimationFrame(() => {
+        [...bundlePairList.children].find(button => button.dataset.bundleKey === focusKey)?.focus({preventScroll: true});
+      });
+    }
+  }
+
+  function drawBundlePanel(active, group) {
+    bundlePanel.hidden = !active;
+    if (!active) return;
+    const key = JSON.stringify([rackFace, expandedBundle, bundleGroups.map(item => [item.key, item.ids])]);
+    if (key !== bundlePanelKey) {
+      bundlePanelKey = key;
+      const focusKey = bundlePanel.contains(document.activeElement) && document.activeElement.dataset.bundleKey;
+      bundlePairList.replaceChildren(...bundleGroups.map(item => {
+        const choice = button("btn btn-outline-secondary btn-sm", bundleName(item) + " · " + item.ids.length);
+        choice.dataset.bundleKey = item.key;
+        choice.setAttribute("aria-pressed", String(item === group));
+        choice.addEventListener("click", () => chooseBundle(item.key, true));
+        return choice;
+      }));
+      const title = get("bundle-title");
+      title.hidden = bundleClear.hidden = bundleCableList.hidden = !group;
+      title.textContent = group ? bundleName(group) : "";
+      get("bundle-status").textContent = bundleGroups.length
+        ? bundleGroups.length + (bundleGroups.length === 1 ? " device pair" : " device pairs")
+        : "No connections between visible ports.";
+      bundleCableList.replaceChildren(...(group?.ids ?? []).map(id => {
+        const cable = cables.get(id);
+        const choice = button("btn btn-outline-secondary btn-sm",
+          listEndpointName(cableEndpoint(cable, "A")) + " ↔ " + listEndpointName(cableEndpoint(cable, "B")));
+        choice.dataset.bundleCableId = id;
+        choice.addEventListener("click", () => selectCable(cable));
+        return choice;
+      }));
+      if (focusKey) {
+        [...bundlePairList.children].find(button => button.dataset.bundleKey === focusKey)?.focus({preventScroll: true});
+      }
+    }
+    for (const choice of bundleCableList.children) {
+      choice.setAttribute("aria-pressed", String(Number(choice.dataset.bundleCableId) === selectedCable?.id));
+    }
+  }
+
+  function drawBundles(mode) {
+    const active = mode === "bundles";
+    bundleGroups = active ? globalThis.NetBoxRackBundles.group(
+      geometry.connections.filter(({id}) => cableButtons.get(id)?.hidden === false),
+    ) : [];
+    const group = bundleGroups.find(item => item.key === expandedBundle);
+    expandedBundle = group?.key ?? null;
+    if (active && !group) {
+      globalThis.NetBoxRackBundles.draw(bundleLayer, bundleGroups, geometry.obstacles, geometry.bounds, {
+        onSelect: item => chooseBundle(item.key, true),
+        describe: bundleName, protectedAreas: geometry.protectedAreas,
+      });
+    } else {
+      bundleLayer.replaceChildren();
+    }
+    drawBundlePanel(active, group);
+    return group;
+  }
+
   function drawCablePaths(mode) {
     const pointer = cableHoverPointer;
     hideWireTooltip();
     shownRoutes.clear();
+    const group = drawBundles(mode);
+    const individualIds = new Set(group?.ids);
     const fragment = document.createDocumentFragment();
     const handles = document.createDocumentFragment();
     let selection = [];
     for (const [id, route] of routes) {
       const cable = cables.get(id);
       const active = cable === selectedCable;
-      if (!active && mode !== "all") continue;
+      if (mode === "bundles" ? !individualIds.has(id) : !active && mode !== "all") continue;
       const {d: path, points} = cableShape(route, cable.a, cable.b);
       shownRoutes.set(id, points);
       const color = cableColor(cable);
@@ -2465,7 +2581,9 @@
         if (b) handles.append(...cableHandle(cable, cable.b, b.x, b.y, color));
       }
     }
-    const stubCandidates = cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
+    const stubCandidates = mode === "bundles"
+      ? group ? [] : Array.from(cableButtons, ([id, row]) => row.hidden ? null : cables.get(id)).filter(Boolean)
+      : cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
     for (const cable of stubCandidates) {
       if (!cableMatchesDevice(cable) || routes.has(cable.id)) continue;
       const visible = visibleCablePath(cable);
@@ -2477,7 +2595,7 @@
         const stroke = wire(path, "re-rack-wire" + style, color);
         stroke.dataset.wireVisual = cable.id;
         const strokes = cableStrokes(stroke, color, cable.id);
-        if (cableFocusDevice) {
+        if (cableFocusDevice || mode === "bundles") {
           const hit = wire(path, "re-rack-wire-hit");
           hit.dataset.wire = cable.id;
           shownRoutes.set(cable.id, visible.points);
@@ -2500,7 +2618,7 @@
   function drawWires() {
     frame = 0;
     routes ??= routeVisibleCables();
-    const mode = cableFocusDevice ? "all" : lines.value;
+    const mode = lines.value === "bundles" ? "bundles" : cableFocusDevice ? "all" : lines.value;
     if (routes !== drawnRoutes || mode !== drawnMode || selectedCable !== drawnSelection) {
       drawCablePaths(mode);
       drawnRoutes = routes;
@@ -2572,6 +2690,13 @@
     if (busy || pending) return;
     source = null;
     selectedCable = cable && cableMatchesDevice(cable) ? cable : null;
+    if (lines.value === "bundles" && selectedCable) {
+      const group = bundleGroups.find(item => item.ids.includes(selectedCable.id));
+      if (group && group.key !== expandedBundle) {
+        expandedBundle = group.key;
+        drawnMode = null;
+      }
+    }
     updateCableDetail();
     updateMarks();
     announce(selectedCable ? cableName(selectedCable) + " selected." : idleMessage());
@@ -3012,8 +3137,17 @@
     editor.toggleAttribute("data-device-cable-focus", Boolean(cableFocusDevice));
     cableFocusClear.hidden = !cableFocusDevice;
     cableFocusClear.textContent = cableFocusDevice ? "Cables: " + cableFocusDevice.name + " ×" : "";
-    lines.disabled = Boolean(cableFocusDevice);
-    lines.title = cableFocusDevice ? "Clear device cable focus to change cable visibility" : "";
+    for (const option of lines.options) {
+      if (option.value === "selected" || option.value === "none") option.disabled = Boolean(cableFocusDevice);
+    }
+    lines.title = cableFocusDevice ? "Device focus shows all matching cables or bundles" : "";
+  }
+
+  function updateRoutingStyle() {
+    const bundled = lines.value === "bundles";
+    board.dataset.routingStrategy = bundled ? "pcb" : routingStrategy.value;
+    routingStrategy.disabled = bundled;
+    routingStrategy.title = bundled ? "Expanded bundles use PCB-style routing" : "";
   }
 
   function setCableFocus(device) {
@@ -3053,7 +3187,7 @@
   restoreSelect(zoom, viewPreferences.zoom);
   restoreSelect(lines, viewPreferences.lines);
   restoreSelect(routingStrategy, viewPreferences.routingStrategy);
-  board.dataset.routingStrategy = routingStrategy.value;
+  updateRoutingStyle();
   updateCableFocusControls();
   restoreSelect(interfaceHighlight, viewPreferences.interfaceHighlight);
   editor.dataset.interfaceHighlightMode = interfaceHighlight.value;
@@ -3181,11 +3315,16 @@
   search.addEventListener("input", changeDirectoryView);
   offImage.addEventListener("change", changeDirectoryView);
   lines.addEventListener("change", () => {
-    scheduleDraw();
+    if (lines.value === "bundles") selectCable(null);
+    updateRoutingStyle();
+    hideWireTooltip();
+    applyElevationSpacing();
+    invalidateRoutes();
     saveViewPreferences();
   });
+  bundleClear.addEventListener("click", () => chooseBundle(null, true));
   routingStrategy.addEventListener("change", () => {
-    board.dataset.routingStrategy = routingStrategy.value;
+    updateRoutingStyle();
     hideWireTooltip();
     applyElevationSpacing();
     invalidateRoutes();
@@ -3418,14 +3557,21 @@
       return;
     }
     if (event.key !== "Escape" || busy ||
-        createDialog.open || editDialog.open || moveDialog.open || detailsDialog.open || historyDialog.open) return;
+        createDialog.open || editDialog.open || moveDialog.open || detailsDialog.open || historyDialog.open ||
+        exportDialog.open) return;
     if (quickSource && !gesture?.moved && !source && !pending) {
       event.preventDefault();
       quickSource = null;
       refreshQuickView();
       return;
     }
-    if (!source && !pending) return;
+    if (!source && !pending) {
+      if (expandedBundle) {
+        event.preventDefault();
+        chooseBundle(null, true);
+      }
+      return;
+    }
     event.preventDefault();
     if (gesture && editor.hasPointerCapture(gesture.id)) editor.releasePointerCapture(gesture.id);
     gesture = null;

@@ -15,6 +15,7 @@
   <script src="{% static 'netbox_rack_editor/rack-rows.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-tooltip.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-cable-path.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'netbox_rack_editor/rack-bundles.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-export.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-print-labels.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-export-list.js' %}?v={{ editor_version }}" defer></script>
@@ -105,6 +106,7 @@
                   <label for="re-rack-lines">Lines</label>
                   <select class="form-select no-ts form-select-sm" id="re-rack-lines" data-lines>
                     <option value="all">All</option>
+                    <option value="bundles">Bundles</option>
                     <option value="selected">Selected only</option>
                     <option value="none">Hidden</option>
                   </select>
@@ -177,6 +179,16 @@
               <span class="re-rack-vlan-key" data-vlan-key="both">Both</span>
             </div>
           </div>
+        </div>
+        <div class="re-rack-bundle-panel" data-bundle-panel hidden>
+          <div class="re-rack-bundle-panel-heading">
+            <p class="re-rack-bundle-panel-label">Cable bundles</p>
+            <p class="re-rack-bundle-status" data-bundle-status role="status"></p>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-bundle-clear hidden>Show all bundles</button>
+          </div>
+          <div class="re-rack-bundle-groups" data-bundle-groups role="group" aria-label="Device pairs"></div>
+          <p class="re-rack-bundle-title" data-bundle-title hidden></p>
+          <div class="re-rack-bundle-cables" data-bundle-cables role="group" aria-label="Cables in selected bundle" hidden></div>
         </div>
         <div class="re-rack-scroll" data-scroll tabindex="0" aria-label="Scrollable rack elevations">
           <div class="re-rack-board" id="re-rack-board" data-board data-rack-face="front">

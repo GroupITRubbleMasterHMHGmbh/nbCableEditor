@@ -2,7 +2,7 @@
 
 NetBox-Plugin für die grafische Verkabelung im Rack. Der Editor zeigt die Vorder- und Rückseiten der Geräte mit ihren Bildern und Ports. Kabel lassen sich direkt im Bild anlegen, umstecken und verfolgen.
 
-Version **0.10.9** ist für **NetBox 4.5.10 und neuere 4.5-Versionen** ausgelegt. Das Plugin verwendet das Python-Environment von NetBox und benötigt mindestens **Python 3.12**.
+Version **0.10.10** ist für **NetBox 4.5.10 und neuere 4.5-Versionen** ausgelegt. Das Plugin verwendet das Python-Environment von NetBox und benötigt mindestens **Python 3.12**.
 
 - [Installation und Updates für bestehende NetBox-Instanzen](docs/installation.md)
 - [Lokale Docker-Demo](#lokale-docker-demo)
@@ -34,6 +34,7 @@ Am Rack **Cable editor** öffnen. Unter **View** zwischen **Front**, **Rear** un
 | Änderungen wiederherstellen | **Undo** und **Redo** gehen schrittweise durch die eigenen Bearbeitungen an diesem Rack. Unter **History** lässt sich ein gespeicherter Stand auswählen. Änderungen durch andere Personen oder andere NetBox-Oberflächen können die Wiederherstellung eines betroffenen Kabels blockieren. |
 | Kabel eines Geräts eingrenzen | Das Filtersymbol neben dem Gerätenamen wählen. Die Ansicht zeigt nur Kabel mit einem direkten Anschluss an diesem Gerät. Andere Geräte bleiben sichtbar und ihre belegten, nicht zugehörigen Ports werden abgeblendet. **Cables: … ×** hebt den Filter auf. **Devices** steuert separat, welche Geräte die Rackansicht zeigt. |
 | Kabelwege darstellen | Unter **View → Routing strategy** zwischen **Balanced** und **PCB-style** wechseln. **PCB-style** nutzt breitere Zwischenräume und abgerundete Kabelbahnen neben, über und unter den Geräten. Die virtuellen Abstände lassen sich mit **+ / −** einstellen. |
+| Kabel bündeln | **View → Lines → Bundles** zeigt pro Gerätepaar und Rackseite eine Bahn mit Kabelanzahl. Ein Klick auf die Bahn oder die Schaltfläche für das Paar zeigt die Einzelkabel und Ports. **Show all bundles** öffnet wieder die Übersicht. Im Druck verknüpft eine Bündelnummer den Plan mit der Portliste. |
 | Kabel verfolgen | Beim Überfahren eines Kabels oder belegten Ports stehen Zielgerät und Zielport oben. Der Tooltip zeigt Zwischenstationen, offene Buchsen und Wege, die nur teilweise sichtbar sind. Die Kabeldetails zeigen die vollständige für dich sichtbare Folge der Anschlüsse. |
 | Plan ausgeben | **Export plan** übernimmt die aktuelle Rackansicht. Für PNG ist die längste Bildkante wählbar. **Print / Save as PDF** entzerrt die Kabelverläufe für den Druck und bietet Papierformat und Ausrichtung zur Wahl. Die optionale Kabelliste gruppiert die passenden Verbindungen nach Gerätepaar. Nummern im Plan verweisen auf die entsprechenden Zeilen. |
 | Ports eingrenzen | **Port rows** blendet einzelne Portreihen aus. Unter **Interfaces** lassen sich freie oder belegte Anschlüsse hervorheben. Die VLAN-Suche unterscheidet **Any**, **Tagged** und **Untagged**. |
