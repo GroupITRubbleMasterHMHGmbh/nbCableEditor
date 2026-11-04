@@ -4,56 +4,29 @@ Design device faces and manage rack cabling directly in NetBox. Place ports on d
 
 Version **0.10.51** supports **NetBox 4.5.10 and later 4.5 releases** and requires **Python 3.12 or later** in the NetBox environment.
 
-- [Installation and upgrades](docs/installation.md)
+- [User guide](docs/user-guide.md)
+- [Installation, upgrades, and permissions](docs/installation.md)
 - [Local Docker demo](#local-docker-demo)
 
 ![Rack view focused on the cables connected to the patch panel](docs/screenshots/rack-cable-focus.png)
 
 The device cable filter shows the patch panel's direct connections and dims occupied ports on unrelated links.
 
-## Design device and module layouts
-
-1. Create the port templates on a NetBox **Device Type** or **Module Type**. Use **Front Port Templates** and **Rear Port Templates** for passive jacks.
-2. Open **Layout editor** and choose **Front** or **Rear**. Use **Use type image** to control the background on each face. Add custom artwork with **Text** or **Rectangle**. Rectangles support an optional fill and a label embedded in the frame, with corner, edge, vertical, and centered positions. Set the font family, size, and color for each text item.
-3. Use **Single port** to place an individual port. With **Port grid**, choose a port range, set rows, columns, and numbering order, then drag the grid on the drawing. A 48-port switch can use 2 rows and 24 columns. Edit port labels individually or apply numbering to a group.
-4. Use **Field → Insert** to add a standard field or an accessible NetBox custom field to a text item or rectangle label. The layout preview uses sample values. The rack shows the actual values the user has permission to see.
-5. Use **Module bay** to draw a region for a NetBox module bay template. The rack shows the installed module's artwork and ports within that region. For module type images, add NetBox image attachments named `Front` and `Rear`.
-6. Select **Save layout**. The layout applies to all instances of the type. Ports without a position remain available in the **Interface directory**.
-
-Use **Select** to draw a selection box. Hold **Shift** while dragging to extend the selection, or use **Ctrl**/**⌘**-click to toggle individual ports. Move the selection together or use **Align** to arrange it in a row, column, or grid. Enable **Grid** or **Objects** under **Snap** for alignment guides. Hold **Alt** to bypass snapping while dragging. **Undo** and **Redo** cover the current editing session on both faces.
-
-![Device layout editor showing the switch's 48 ports in two rows](docs/screenshots/port-layout.png)
-
 ## Work with cables in a rack
 
-Open a rack in NetBox and select **Cable editor**. Use **View** to switch between **Front**, **Rear**, and **Both**, control device image opacity, and select the zoom and routing strategy. **Zoom → Fit** fills the available drawing width, including when **Trim width to visible ports** is active. Scroll vertically to see taller racks. Free ports have two green lines, while connected ports have a closed amber outline. Port labels stay inside the outline and wrap when that allows larger text.
+Open a rack in NetBox and select **Cable editor**. Start with **View → Rack side → Front** and **Zoom → Fit**. Choose which devices and port rows to show, focus on one device's cables, or use a VLAN filter to find free ports.
 
-| Task | How to do it |
-| --- | --- |
-| Connect two ports | Drag from a free port to another free port. Set the cable type, color, label, and optional length with its unit. The dialog prefills the previous type and color. Press **Enter** to submit. |
-| Connect to a device outside the view | Double-click a free port and choose **Manual Connect**. The native NetBox cable form preselects the port on side A. Use the side B type, device, and port selectors to find the other end, including devices without a rack. Save or cancel to return to the same rack view. |
-| Move a cable end | Drag the connected port or the handle on the cable to a free port and confirm. The cable keeps its ID and metadata. |
-| Inspect or edit a cable | Click a cable to see its endpoints, VLANs, port types, PoE, connection status, and trace. With change permission, edit color, length, label, description, tags, and comments in the dialog. Text fields save on blur or **Enter**, and comments save with **Ctrl+Enter**. Colors and tags save on selection. |
-| Use cable and port actions | Right-click a cable or port to open its context menu. The menu shows the actions available for that item and your permissions. |
-| Connect or unplug in batches | Use **Quick connect** to stage pairs or **Unplug** to stage removals. **Apply batch** saves the queued changes together. **Discard** clears the queue. |
-| Restore an earlier state | Use **Undo** and **Redo** to step through cable changes made in the rack editor, or select a checkpoint in **History**. An edit to the same cable from another user or NetBox screen can prevent that cable from being restored. |
-| Focus on one device | Click the filter icon beside a device name to show its direct connections. Click the **Cables** chip to clear the filter. Use **Devices** to choose which devices are visible and **Port rows** to hide individual rows. |
-| Choose how cables are drawn | Use **View → Routing strategy** to choose **Balanced** or **PCB-style**. Both route upper and lower port rows through their nearest device edge when space allows and distribute cables across available tracks. PCB-style uses rounded turns. Adjust the virtual gaps between devices with **+** and **−**. |
-| Try virtual cable sleeves | Enable **View → Virtual combine** to route at least three cables that connect adjacent ports in the same order on both devices through a narrow sleeve. Sleeves use the longest clear section the router finds. They can also run horizontally between side-by-side port groups. The router aims for 25 px of clearance beside parallel cables and keeps at least 15 px around other cables. Hover a sleeve to reveal every member inside its outline. This experimental setting is off by default. |
-| Bundle cables | Use **View → Lines → Bundles** to group cables by device pair and rack face. Select a bundle to show its individual cables. **Show all bundles** returns to the overview. |
-| Inspect ports and VLANs | Double-click a port or choose **Port details** in its context menu. View the port type, VLANs, PoE, status, and any connected endpoint. The dialog links to native NetBox objects and supports editing the NetBox label and tags with change permission. |
-| Find usable ports | Use **View → Interfaces** to highlight free or used ports. Filter by a VLAN ID and choose **Any**, **Tagged**, or **Untagged**. In **Port fill → Untagged VLAN**, the fill represents the VLAN and the outline shows connection status. Color rules use the first match, then the VLAN's `editorColorHex` value or the optional fallback color. |
-| Print or export | Select **Export** to create a PNG with a chosen longest edge, or choose **Print / Save as PDF** to set the paper size and orientation. The print layout gives cable routes more space and can include a compact cable list grouped by device pair, with reference numbers in the plan. |
+- [Filter devices, port rows, and cables](docs/user-guide.md#filter-devices-rows-and-cables)
+- [Choose a rack side, line mode, and routing strategy](docs/user-guide.md#choose-the-rack-view)
+- [Find ports by VLAN and configure port colors](docs/user-guide.md#find-ports-by-vlan)
+- [Connect, trace, and edit cables](docs/user-guide.md#inspect-and-change-connections)
+- [Export a rack plan to PNG or PDF](docs/user-guide.md#export-the-rack-plan)
 
-Hover over a port to see its enlarged label. Cable tooltips show both physical ends at four times the rack marker size and use a color swatch for the cable. This also works with **Selected only** enabled or when the other device is hidden. Hover over or select an entry in **Connections** to highlight its cable in the drawing. The **Interface directory** shows port status and the connected peer. Use **Fields** in either list to choose which details appear. The browser remembers view options, including zoom, panel visibility, and **Trim width to visible ports**.
+![Cable tooltip with enlarged port previews and an arrow from the source to the destination](docs/screenshots/user-guide-cable-hover.png)
 
-### Trace patch panels and wall outlets
+## Design device and module layouts
 
-The editor works with native NetBox devices, ports, cables, and images. It stores layouts for device and module types and tracks personal cable history per rack. Direct editing in the rack drawing supports one-to-one cables between interfaces, front ports, and rear ports in the same rack. **Manual Connect** opens the native NetBox form for connections beyond the drawing. Traces follow native port mappings through patch panels to a wall outlet or endpoint outside the rack when the user has permission to view that path.
-
-![Cable details tracing Switch A through a patch panel and wall outlet to an access point](docs/screenshots/cable-trace.png)
-
-See the [permissions guide](docs/installation.md#permissions) for the required NetBox object permissions.
+Open **Layout editor** from a device type or module type. Place individual ports or arrange a range in a grid. Add custom artwork, text, or module bays, then save the layout for every instance of that type. [Design a device or module layout](docs/user-guide.md#design-a-device-or-module-layout)
 
 ## Local Docker demo
 
