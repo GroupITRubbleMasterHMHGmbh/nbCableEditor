@@ -14,6 +14,8 @@ from PIL import Image, ImageDraw, ImageFont
 from netbox_rack_editor.cable_views import port_unavailable
 from netbox_rack_editor.models import PortPlacement
 
+from dev.module_demo import seed_module_demo
+
 
 def png(image):
     result = BytesIO()
@@ -282,5 +284,6 @@ with transaction.atomic():
         )
     if switches["Switch A"].rack_id == rack.pk and switches["Switch A"].device_type_id == device_type.pk:
         seed_patch_demo(rack, switches["Switch A"], manufacturer)
+    seed_module_demo(rack)
 
 print(f"Rack: {rack.get_absolute_url()} — Device type: {device_type.get_absolute_url()}")

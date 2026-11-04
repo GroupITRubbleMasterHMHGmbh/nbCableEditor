@@ -12,19 +12,22 @@
   const viewConnections = get("view-connections");
   const viewDirectory = get("view-directory");
   const viewTrim = get("view-trim");
+  const viewVirtualCombine = get("view-virtual-combine");
   const connectionsSection = get("connections-section");
   const directorySection = get("directory-section");
   const viewPreferencesKey = "netbox-rack-editor:view";
   const rackPreferencesKey = viewPreferencesKey + ":" + location.pathname;
   const viewPreferences = readViewPreferences(viewPreferencesKey);
   const rackPreferences = readViewPreferences(rackPreferencesKey);
-  const defaultGap = 48;
-  const pcbDefaultGap = 86;
+  const defaultGap = 64;
+  const pcbDefaultGap = 102;
   const minimumGapScale = .85;
-  const deviceClearance = 20;
+  const deviceEdgeClearance = 25;
   const parallelCableGap = 4.5;
-  const maxGap = 120;
-  const gapStep = 4;
+  const extraHorizontalGap = 5;
+  const maxAutomaticGap = 140;
+  const maxGap = 240;
+  const gapStep = 48;
   const baseRackUnit = 40;
   const rackFaceAspect = 19 / 1.75;
   const savedGaps = new Map(Object.entries(rackPreferences.deviceGaps ?? {}).filter(
@@ -32,6 +35,7 @@
   ));
   const board = get("board");
   const scroll = get("scroll");
+  const unitElevation = get("unit-elevation");
   const gutter = get("gutter");
   const faceChoices = Array.from(editor.querySelectorAll("[data-rack-face-choice]"));
   const facePanels = Array.from(board.querySelectorAll("[data-rack-face-panel]"));
@@ -167,6 +171,7 @@
   definitions.append(mask);
   const wireLayer = document.createElementNS(SVG, "g");
   const bundleLayer = document.createElementNS(SVG, "g");
+  const sleeveLayer = document.createElementNS(SVG, "g");
   const traceLayer = document.createElementNS(SVG, "g");
   const traceMarkers = new Set();
   const traceTargets = new Set();
@@ -175,10 +180,16 @@
   const hoverLayer = document.createElementNS(SVG, "g");
   const handleLayer = document.createElementNS(SVG, "g");
   const previewLayer = document.createElementNS(SVG, "g");
+  previewLayer.dataset.wirePreviews = "";
   for (const layer of [wireLayer, traceLayer, hoverLayer, handleLayer, previewLayer]) {
     layer.setAttribute("mask", "url(#" + mask.id + ")");
   }
-  wires.append(definitions, bundleLayer, wireLayer, traceLayer, hoverLayer, handleLayer, previewLayer);
+  wires.append(definitions, bundleLayer, wireLayer, sleeveLayer, traceLayer, hoverLayer, handleLayer, previewLayer);
+  let combinedRoutes = new Map();
+  let cableSleeves = new Map();
+  let sleeveAreas = [];
+  let sleeveHover = null;
+  let activeSleeves = [];
   const shownRoutes = new Map();
   const occupancyLabels = {free: "Free", cabled: "Cabled", marked: "Marked connected", other: "Other occupancy"};
 
@@ -297,9 +308,12 @@
     return nativePortKind(port) ? "" : port.enabled ? "Enabled" : "Disabled";
   }
 
+  function portDisplayLabel(port) {
+    return port.layoutLabel?.trim() || port.label?.trim() || port.name.match(/\d+$/)?.[0] || port.name;
+  }
+
   function markerLabel(port) {
-    const text = port.layoutLabel?.trim() || port.label?.trim() || port.name.match(/\d+$/)?.[0] || port.name;
-    const label = node("span", "re-rack-port-label", text);
+    const label = node("span", "re-rack-port-label", portDisplayLabel(port));
     label.setAttribute("aria-hidden", "true");
     return label;
   }
@@ -645,7 +659,7 @@
 
   function virtualGapSize(gap) {
     const base = board.dataset.routingStrategy === "pcb" ? pcbDefaultGap : defaultGap;
-    return savedGaps.get(gap.key) ?? Math.min(maxGap, base + Math.round(Math.max(0, routingBay - 32) / 2));
+    return savedGaps.get(gap.key) ?? Math.min(maxAutomaticGap, base + Math.round(Math.max(0, routingBay - 32) / 2));
   }
 
   function gapControl(gap, location) {
@@ -789,10 +803,34 @@
     const gaps = adjacentDeviceBoundaries(projected);
     const rowNumber = row => startingUnit + (data.descUnits ? row : data.height - row - 1);
     const rowCount = Math.max(1, rows.length);
-    elevationSpacing = {gaps, rows: [], cards: [], rowCount, focused: focusedDevices.size > 1 && mounted.length > 1};
+    elevationSpacing = {gaps, rows: [], cards: [], focused: focusedDevices.size > 1 && mounted.length > 1};
     board.style.setProperty("--re-rack-height", rowCount);
     markers.clear();
     photos.clear();
+
+    function appendRows(elevation, numbered = false) {
+      for (const [index, row] of rows.entries()) {
+        const tick = node("div", "re-rack-row");
+        if (numbered) {
+          const label = node("span", "", String(rowNumber(row)));
+          label.dataset.rackUnitLabel = "";
+          tick.append(label);
+        }
+        elevationSpacing.rows.push({index, tick});
+        elevation.append(tick);
+      }
+    }
+
+    unitElevation.replaceChildren();
+    unitElevation.parentElement.hidden = !rows.length;
+    appendRows(unitElevation, true);
+    for (const gap of gaps) {
+      const lower = rowNumber(rows[Math.floor(gap.top)]);
+      const location = Number.isInteger(gap.top)
+        ? "between U " + rowNumber(rows[gap.top - 1]) + " and U " + lower
+        : "within U " + lower;
+      unitElevation.append(gapControl(gap, location));
+    }
 
     for (const face of ["front", "rear"]) {
       const elevation = editor.querySelector('[data-elevation="' + face + '"]');
@@ -803,19 +841,7 @@
           "No selected devices are mounted on this side."));
         continue;
       }
-      for (const [index, row] of rows.entries()) {
-        const tick = node("div", "re-rack-row");
-        tick.append(node("span", "", String(rowNumber(row))));
-        elevationSpacing.rows.push({index, tick});
-        elevation.append(tick);
-      }
-      for (const gap of gaps) {
-        const lower = rowNumber(rows[Math.floor(gap.top)]);
-        const location = Number.isInteger(gap.top)
-          ? "between U " + rowNumber(rows[gap.top - 1]) + " and U " + lower
-          : "within U " + lower;
-        elevation.append(gapControl(gap, location));
-      }
+      appendRows(elevation);
 
       for (const {device, top} of projected) {
         if (device.face !== face && !device.fullDepth) continue;
@@ -1113,17 +1139,20 @@
   }
 
   function cableStrokes(stroke, color, cableId) {
+    const path = stroke.getAttribute("d");
+    const rim = wire(path, "re-rack-wire-rim");
+    rim.dataset.wireRim = cableId;
     const [r, g, b] = [1, 3, 5].map(offset => {
       const value = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
       return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
     });
     const luminance = .2126 * r + .7152 * g + .0722 * b;
-    // Midtones remain unoutlined; CSS selects the low-contrast end for each theme.
+    // The extra contrast stroke keeps very light or dark cables visible against the page.
     const tone = luminance > .30 ? "light" : luminance < .14 ? "dark" : null;
-    if (!tone) return [stroke];
-    const outline = wire(stroke.getAttribute("d"), "re-rack-wire-contrast re-rack-wire-contrast-" + tone);
+    if (!tone) return [rim, stroke];
+    const outline = wire(path, "re-rack-wire-contrast re-rack-wire-contrast-" + tone);
     outline.dataset.wireContrast = cableId;
-    return [outline, stroke];
+    return [rim, outline, stroke];
   }
 
   function cableName(cable) {
@@ -1301,9 +1330,10 @@
     try {
       applyElevationSpacing(true);
       const job = measureRouting(cable => displayed.has(cable.id) || bundled.has(cable.id), "pcb");
-      const origin = board.getBoundingClientRect();
+      const origin = wires.getBoundingClientRect();
       const titles = Array.from(board.querySelectorAll(".re-rack-device-name"), title => relativeRect(title, origin));
-      const paths = computeRoutes({...job, connections: job.connections.filter(({id}) => displayed.has(id)), spacing: 12});
+      const paths = computeRoutes({...job, connections: job.connections.filter(({id}) => displayed.has(id)),
+        spacing: 12, horizontalSpacing: 12 + extraHorizontalGap});
       const printGroups = globalThis.NetBoxRackBundles.group(job.connections.filter(({id}) => bundled.has(id)));
       for (const id of displayed) {
         if (paths.has(id)) continue;
@@ -1311,11 +1341,12 @@
         const from = [cable.a, cable.b].find(port => visibleMarker(port));
         if (from !== undefined) paths.set(id, stubPoints(from, visibleMarker(from), job.protectedAreas));
       }
+      const combined = planVirtualTubes(job, paths);
       return globalThis.NetBoxRackExport.snapshot(board, drawing => {
         const svg = drawing.querySelector("[data-wires]");
         const definitions = svg.querySelector("defs");
         const printMask = definitions.querySelector("mask");
-        updatePortMask(job.bounds, job.cuts, printMask);
+        updatePortMask(job.bounds, job.portRects.values(), printMask);
         const pathsLayer = document.createElementNS(SVG, "g");
         pathsLayer.setAttribute("mask", "url(#" + printMask.id + ")");
         svg.replaceChildren(definitions, pathsLayer);
@@ -1329,16 +1360,25 @@
         }
         for (const [id, points] of paths) {
           const cable = cables.get(id);
-          const shape = cableShape(points, cable.a, cable.b, job);
+          const hasA = job.endpoints.has(cable.a);
+          const hasB = job.endpoints.has(cable.b);
+          const stub = !hasA || !hasB;
+          const shape = stub ? cableShape(points, hasA ? cable.a : cable.b, undefined, job)
+            : displayedCableShape(cable, points, job, combined.paths);
           const color = cableColor(cable);
           const stroke = wire(shape.d, "re-rack-wire re-rack-wire-print", color);
           stroke.style.stroke = color;
           stroke.dataset.wireVisual = id;
           const strokes = [wire(shape.d, "re-rack-wire-print-casing"), ...cableStrokes(stroke, color, id)];
-          if (!job.endpoints.has(cable.a) || !job.endpoints.has(cable.b)) {
+          if (stub) {
             for (const line of strokes) line.classList.add("re-rack-wire-print-stub");
           }
           pathsLayer.append(...strokes);
+        }
+        if (combined.tubes.length) {
+          const sleeves = document.createElementNS(SVG, "g");
+          drawVirtualSleeves(sleeves, combined.tubes);
+          svg.append(sleeves);
         }
         for (const element of drawing.querySelectorAll(".re-rack-trace-target-highlight, .re-rack-trace-end-highlight, .re-rack-trace-device-highlight")) {
           element.classList.remove("re-rack-trace-target-highlight", "re-rack-trace-end-highlight", "re-rack-trace-device-highlight");
@@ -1595,14 +1635,16 @@
       if (busy) return;
       const navigate = () => {
         applyRackFace(face);
-        selectCable(cable);
         requestAnimationFrame(() => {
           const marker = visibleMarker(portId);
           if (marker) locateMarker(marker);
         });
       };
       if (detailsDialog.open) closeDetails(detailsDialog, navigate);
-      else navigate();
+      else {
+        navigate();
+        selectCable(cable);
+      }
     });
     container.append(show);
   }
@@ -1993,6 +2035,16 @@
     if (!opposite) {
       const state = port.occupancy === "cabled" ? "Cable destination unavailable" : occupancyLabels[port.occupancy];
       section.append(node("p", "re-rack-detail-position", state ?? "Unavailable"));
+      const manualConnectUrl = httpUrl(port.manualConnectUrl);
+      if (manualConnectUrl && !stagedByPort.has(port.id)) {
+        const connect = button("btn btn-outline-primary btn-sm me-auto", "Manual Connect");
+        connect.addEventListener("click", () => {
+          const url = new URL(manualConnectUrl);
+          url.searchParams.set("return_url", location.pathname + location.search);
+          closeDetails(portDialog, () => location.assign(url.href));
+        });
+        section.append(connect);
+      }
       return section;
     }
 
@@ -2258,16 +2310,29 @@
 
   const cableShapes = new WeakMap();
 
-  function cableShape(points, from, to, job = geometry) {
-    if (job?.strategy !== "pcb" || points.length < 3) return {d: pathData(points), points};
-    if (!cableShapes.has(points)) {
-      const fromCard = job.endpoints.get(from)?.device;
-      const toCard = job.endpoints.get(to)?.device;
-      const otherCards = job.obstacles.filter(card => card.id !== fromCard && card.id !== toCard)
-        .map(card => growRect(card, Math.max(0, (job.deviceClearance ?? 0) - 2)));
-      cableShapes.set(points, globalThis.NetBoxRackCablePath.roundPath(points, [...otherCards, ...job.protectedAreas]));
+  function cableShape(points, from, to, job = geometry, {compact = false, targetRect} = {}) {
+    if (!targetRect && cableShapes.has(points)) return cableShapes.get(points);
+    const {anchorPorts, roundPath} = globalThis.NetBoxRackCablePath;
+    const fromCard = job?.endpoints.get(from)?.device;
+    const toCard = job?.endpoints.get(to)?.device;
+    const otherCards = job?.obstacles.filter(card => card.id !== fromCard && card.id !== toCard) ?? [];
+    const protectedAreas = job?.protectedAreas ?? [];
+    const anchored = anchorPorts(points, job?.portRects.get(from), targetRect ?? job?.portRects.get(to),
+      [...otherCards, ...protectedAreas], {preserveAligned: compact, bounds: job?.bounds});
+    let shape = {d: pathData(anchored), points: anchored};
+    if (job?.strategy === "pcb" && anchored.length >= 3) {
+      const clearance = Math.max(0, (job.deviceClearance ?? 0) - 1);
+      const cornerObstacles = otherCards.map(card => growRect(card, clearance));
+      shape = roundPath(anchored, [...cornerObstacles, ...protectedAreas], compact ? 3 : undefined, true);
     }
-    return cableShapes.get(points);
+    if (!targetRect) cableShapes.set(points, shape);
+    return shape;
+  }
+
+  function displayedCableShape(cable, points, job = geometry, overrides = combinedRoutes) {
+    const compact = overrides.get(cable.id);
+    const route = compact ?? points;
+    return route ? cableShape(route, cable.a, cable.b, job, {compact: Boolean(compact)}) : null;
   }
 
   function wire(d, className, color) {
@@ -2334,7 +2399,7 @@
     if (hit.hasAttribute("data-cable-end")) return cable;
 
     // Wider hit strokes make narrow cables easier to click. In an overlap, use the nearest visible line.
-    const origin = board.getBoundingClientRect();
+    const origin = wires.getBoundingClientRect();
     const pointer = {x: event.clientX - origin.left, y: event.clientY - origin.top};
     let closest = cable;
     let distance = distanceToPath(pointer, shownRoutes.get(cable.id));
@@ -2373,9 +2438,9 @@
   }
 
   function stubPoints(portId, marker, protectedAreas = geometry?.protectedAreas ?? []) {
-    const boardRect = board.getBoundingClientRect();
-    const start = point(marker, boardRect);
-    const across = start.x <= boardRect.width / 2 ? 1 : -1;
+    const wireRect = wires.getBoundingClientRect();
+    const start = point(marker, wireRect);
+    const across = start.x <= wireRect.width / 2 ? 1 : -1;
     const down = ports.get(portId)?.y < 0.5 ? 1 : -1;
     const diagonal = Math.SQRT1_2;
     const directions = [
@@ -2387,7 +2452,7 @@
     let end = start;
     for (const [dx, dy] of directions) {
       const toEdge = (at, step, limit) => step > 0 ? (limit - at) / step : step < 0 ? -at / step : Infinity;
-      let length = Math.min(32, toEdge(start.x, dx, boardRect.width), toEdge(start.y, dy, boardRect.height));
+      let length = Math.min(32, toEdge(start.x, dx, wireRect.width), toEdge(start.y, dy, wireRect.height));
       for (const area of protectedAreas) {
         if (area.port === portId && area.kind === "port") continue;
         let entry = 0;
@@ -2416,8 +2481,8 @@
     if (longest >= Math.max(width, height) / 2 + 5) return [start, end];
 
     // Dense rows can leave no visible straight exit. Turn into the gap between rows.
-    const turn = {x: start.x, y: Math.max(0, Math.min(boardRect.height, start.y + down * (height / 2 + 1.5)))};
-    end = {x: Math.max(0, Math.min(boardRect.width, turn.x + across * 24)), y: turn.y};
+    const turn = {x: start.x, y: Math.max(0, Math.min(wireRect.height, start.y + down * (height / 2 + 1.5)))};
+    end = {x: Math.max(0, Math.min(wireRect.width, turn.x + across * 24)), y: turn.y};
     return [start, turn, end];
   }
 
@@ -2425,13 +2490,12 @@
     const a = visibleMarker(cable.a);
     const b = visibleMarker(cable.b);
     if (a && b) {
-      const points = routes?.get(cable.id);
-      return points ? {...cableShape(points, cable.a, cable.b), from: cable.a, stub: false} : null;
+      const shape = displayedCableShape(cable, routes?.get(cable.id));
+      return shape ? {...shape, from: cable.a, stub: false} : null;
     }
     const from = [preferredPortId, cable.a, cable.b].find(id => visibleMarker(id));
     if (from === undefined) return null;
-    const points = stubPoints(from, visibleMarker(from));
-    return {d: pathData(points), points, from, stub: true};
+    return {...cableShape(stubPoints(from, visibleMarker(from)), from), from, stub: true};
   }
 
   function drawTracePreview(cable, end = null) {
@@ -2514,7 +2578,7 @@
         const last = trace.hops.slice(1).findLast(hop => visibleMarker(hop.portId));
         if (last) {
           const marker = visibleMarker(last.portId);
-          const {x, y} = point(marker, board.getBoundingClientRect());
+          const {x, y} = point(marker, wires.getBoundingClientRect());
           const offset = marker.getBoundingClientRect().width / 2 + 6;
           continuation({x: x + offset, y});
         }
@@ -2540,6 +2604,7 @@
       }
     }
     hoveredCable = cable;
+    highlightVirtualSleeves(cable ?? selectedCable);
     hoveredPort = port;
     hoverEnd = end;
     hoverPoints = [];
@@ -2573,6 +2638,7 @@
   function resetTooltipPlacement() {
     tooltipPlacement = null;
     tooltip.removeAttribute("data-compact");
+    tooltip.removeAttribute("data-narrow");
     if (tooltip.hasAttribute("data-docked")) {
       tooltip.removeAttribute("data-docked");
       tooltipGuide.after(tooltip);
@@ -2592,7 +2658,7 @@
   function positionWireTooltip(event) {
     const viewport = {right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight};
     const frame = scroll.getBoundingClientRect();
-    const origin = board.getBoundingClientRect();
+    const origin = wires.getBoundingClientRect();
     const clip = {
       left: Math.max(0, frame.left + scroll.clientLeft),
       top: Math.max(0, frame.top + scroll.clientTop),
@@ -2631,6 +2697,10 @@
         tooltip.setAttribute("data-compact", "");
         placement = findPlace();
       }
+      if (!placement && viewport.right <= 480 && tooltip.hasAttribute("data-tooltip-cable") && !tooltip.hasAttribute("data-narrow")) {
+        tooltip.setAttribute("data-narrow", "");
+        placement = findPlace();
+      }
       if (placement) {
         tooltipPlacement = placement;
         tooltip.style.left = placement.left + "px";
@@ -2658,9 +2728,11 @@
     clearTimeout(hoverTimer);
     hoverTimer = null;
     hoverTargetKey = null;
+    if (!tooltip.hidden) resetTooltipPlacement();
     tooltip.hidden = true;
     tooltipKey = null;
     cableHoverPointer = null;
+    showSleeveHover(null);
     highlightCable(null);
   }
 
@@ -2673,7 +2745,7 @@
 
   function offviewEndpointLabel(port) {
     if (!port || visibleMarker(port.id)) return "";
-    const device = port.id ? port.device : data.devices.find(candidate => candidate.id === port.deviceId);
+    const device = ports.get(port.id)?.device ?? data.devices.find(candidate => candidate.id === port.deviceId);
     if (!device) return port.device.rackName ? "Rack " + port.device.rackName : "Outside this rack";
 
     const mounted = mountedTop(data, device) !== null;
@@ -2683,6 +2755,15 @@
     else if (!portFaceVisible(port.id)) reason = "Rack side not shown";
     else if (!portRowVisible(port.id)) reason = "Port row hidden";
     return mounted ? reason + " · U " + device.position : reason;
+  }
+
+  function tooltipPortLocation(port) {
+    const offview = offviewEndpointLabel(port);
+    if (offview) return offview;
+    const side = rackSideOfPort(port.id);
+    if (!side) return "";
+    const face = side === "front" ? "Rack front" : "Rack rear";
+    return port.device.position != null ? face + " · U " + port.device.position : face;
   }
 
   function traceHopPort(hop) {
@@ -2730,12 +2811,62 @@
     return list;
   }
 
+  function tooltipPortPreview(card, port) {
+    const marker = visibleMarker(port.id);
+    const size = marker?.getBoundingClientRect();
+    const markerText = marker?.querySelector(".re-rack-port-label");
+    const font = markerText ? parseFloat(getComputedStyle(markerText).fontSize) *
+      Number(markerText.style.getPropertyValue("--re-rack-port-label-scale")) : 0;
+    const text = portDisplayLabel(port);
+    const minimumWidth = text.length > 4 ? 88 : 56;
+    card.style.setProperty("--re-rack-preview-width", Math.ceil(Math.max(minimumWidth, (size?.width ?? 0) * 4)) + "px");
+    const state = port.occupancy ? portState(port) : "connected";
+    const preview = node("span", "re-rack-tooltip-port-preview re-rack-port-" + state);
+    preview.dataset.tooltipPortPreview = port.id ?? "";
+    preview.style.minHeight = Math.ceil(Math.max(46, (size?.height ?? 0) * 4)) + "px";
+    preview.style.fontSize = Math.max(24, font * 4) + "px";
+    updatePortVlanFill(preview, port);
+    const label = node("span", "re-rack-tooltip-preview-label", text);
+    label.dataset.tooltipPreviewLabel = "";
+    preview.append(label);
+    return preview;
+  }
+
+  function tooltipEndpoint({port, end}, role, trace = null) {
+    const card = node("div", "re-rack-tooltip-endpoint");
+    if (end) card.dataset.tooltipEndpoint = end;
+    if (role === "source") card.dataset.tooltipSource = "";
+    if (role === "target") {
+      card.dataset.tooltipTarget = "";
+      card.dataset.targetStatus = trace?.status ?? "direct";
+    }
+    const heading = node("div", "re-rack-tooltip-endpoint-heading");
+    heading.append(node("span", "re-rack-tooltip-end-badge", end ? "End " + end : nativePortKind(port) || "Interface"));
+    if (role) {
+      const label = {source: "From", next: "Next port", target: trace?.status === "open" ? "Open end" : "Destination"}[role];
+      heading.append(node("span", "re-rack-tooltip-endpoint-role", label));
+    } else if (!end) {
+      heading.append(node("span", "re-rack-tooltip-endpoint-role", occupancyLabels[port.occupancy] ?? "Unavailable"));
+    }
+    card.append(heading, node("div", "re-rack-tooltip-device", port?.device.name ?? "Unknown endpoint"));
+    if (!port) return card;
+    if (port.device.deviceType) card.append(node("div", "re-rack-tooltip-device-type", port.device.deviceType));
+    card.append(tooltipPortPreview(card, port), node("span", "re-rack-tooltip-endpoint-name", port.name));
+    const location = tooltipPortLocation(port);
+    if (location) card.append(node("div", "re-rack-tooltip-offview", location));
+    if (trace) card.append(node("div", "re-rack-tooltip-target-status", traceStatus(trace)));
+    return card;
+  }
+
   function renderPortTooltip(port, withCable) {
     const panel = node("div", "re-rack-tooltip-port-details");
     panel.dataset.tooltipPortDetails = "";
-    const heading = node("div", "re-rack-tooltip-port-heading");
-    heading.append(node("span", "re-rack-tooltip-port-title", withCable ? "Port details" : describe(port)),
-      node("span", "re-rack-tooltip-port-state", occupancyLabels[port.occupancy] ?? "Unavailable"));
+    if (withCable) {
+      const heading = node("div", "re-rack-tooltip-port-heading");
+      heading.append(node("span", "re-rack-tooltip-port-title", describe(port)),
+        node("span", "re-rack-tooltip-port-state", occupancyLabels[port.occupancy] ?? "Unavailable"));
+      panel.append(heading);
+    }
     const fields = node("dl", "re-rack-tooltip-port-fields");
     for (const [label, value] of [
       ["Type", port.type || nativePortKind(port) || "Not set"],
@@ -2749,56 +2880,45 @@
       row.append(node("dt", "", label), detail);
       fields.append(row);
     }
-    panel.append(heading, fields);
+    panel.append(fields);
     return panel;
   }
 
-  function renderWireTooltip(cable, far, near) {
+  function renderWireTooltip(cable, near, far) {
     const trace = cable["trace" + far.end];
     const hop = traceTarget(trace);
-    const peer = hop ? traceHopPort(hop) : far.port;
-    const status = trace?.status ?? "direct";
-    const target = node("div", "re-rack-tooltip-target");
-    target.dataset.tooltipTarget = "";
-    target.dataset.targetStatus = status;
-    if (trace?.active === false) target.dataset.inactive = "";
-    const label = {
-      direct: "Destination", complete: "Destination", open: "Open end",
-    }[status] ?? (hop ? "Last visible stop" : "Known cable end");
-    const kicker = node("div", "re-rack-tooltip-kicker", label);
-    if (trace) kicker.append(node("span", "re-rack-tooltip-target-status", traceStatus(trace)));
-    target.append(kicker, node("div", "re-rack-tooltip-device", peer?.device.name ?? "Unknown endpoint"));
-    if (peer) {
-      target.append(node("span", "re-rack-tooltip-port", peer.name));
-      if (peer.device.deviceType) target.append(node("span", "re-rack-tooltip-device-type", peer.device.deviceType));
-      const side = rackSideOfPort(peer.id);
-      const location = offviewEndpointLabel(peer);
-      const view = location || (side === "front" ? "Rack front" : side === "rear" ? "Rack rear" : "");
-      if (view) target.append(node("div", "re-rack-tooltip-offview", view));
-    }
-    tooltip.replaceChildren(target);
-    if (near.port) {
-      const source = node("div", "re-rack-tooltip-source");
-      source.append(node("span", "", "From"), node("span", "", describe(near.port)));
-      tooltip.append(source);
-    }
+    tooltip.setAttribute("data-tooltip-cable", "");
+    tooltip.replaceChildren();
+    const endpoints = node("div", "re-rack-tooltip-endpoints");
+    const arrow = node("span", "re-rack-tooltip-direction", "→");
+    arrow.setAttribute("aria-hidden", "true");
+    endpoints.append(tooltipEndpoint(near, "source"), arrow,
+      hop ? tooltipEndpoint(far, "next") : tooltipEndpoint(far, "target", trace));
+    tooltip.append(endpoints);
     const via = trace && traceSection(trace, far.end, true);
     if (via) tooltip.append(via);
-    const color = cableHex(cable);
-    const fields = [cable.label, cable.type, cable.length].filter(Boolean);
-    if (color || fields.length) {
-      const meta = node("div", "re-rack-tooltip-meta");
-      if (color) {
-        const chip = node("span", "re-rack-tooltip-color");
-        const swatch = node("span", "re-rack-tooltip-swatch");
-        swatch.setAttribute("aria-hidden", "true");
-        swatch.style.backgroundColor = color;
-        chip.append(swatch, cableColorLabel(color.toUpperCase()));
-        meta.append(chip);
-      }
-      for (const field of fields) meta.append(node("span", "", field));
-      tooltip.append(meta);
+    if (hop) {
+      const peer = traceHopPort(hop);
+      const target = node("div", "re-rack-tooltip-target");
+      target.dataset.tooltipTarget = "";
+      target.dataset.targetStatus = trace.status;
+      if (trace.active === false) target.dataset.inactive = "";
+      const label = {complete: "Destination", open: "Open end"}[trace.status] ?? "Last visible stop";
+      const kicker = node("div", "re-rack-tooltip-kicker", label);
+      kicker.append(node("span", "re-rack-tooltip-target-status", traceStatus(trace)));
+      target.append(kicker, node("div", "re-rack-tooltip-device", peer.device.name ?? "Unknown endpoint"));
+      target.append(node("span", "re-rack-tooltip-port", peer.name));
+      if (peer.device.deviceType) target.append(node("span", "re-rack-tooltip-device-type", peer.device.deviceType));
+      const location = tooltipPortLocation(peer);
+      if (location) target.append(node("div", "re-rack-tooltip-offview", location));
+      tooltip.append(target);
     }
+    const meta = node("div", "re-rack-tooltip-meta");
+    const swatch = node("span", "re-rack-tooltip-swatch");
+    swatch.setAttribute("aria-hidden", "true");
+    meta.append(swatch);
+    for (const field of [cable.label, cable.type, cable.length].filter(Boolean)) meta.append(node("span", "", field));
+    tooltip.append(meta);
     const accent = cableColor(cable);
     tooltip.style.setProperty("--re-rack-tooltip-accent", accent);
     tooltipGuide.style.setProperty("--re-rack-tooltip-accent", accent);
@@ -2812,6 +2932,10 @@
     const entry = target?.closest("[data-port-directory-id]");
     const directoryPort = entry && directory.contains(entry) ? ports.get(portIdsByDataset.get(entry.dataset.portDirectoryId)) : null;
     const port = listedCable ? null : portAt(target) ?? directoryPort;
+    if (!port && !listedCable) {
+      const sleeve = sleeveAt(event, target);
+      if (sleeve) return {sleeve, key: "sleeve:" + sleeve.dataset.wireSleeve};
+    }
     const candidate = listedCable ?? (port ? cables.get(port.cableId) : cableAt(event));
     const group = expandedBundle && bundleGroups.find(item => item.key === expandedBundle);
     const cable = candidate && cableMatchesDevice(candidate) && (!group || group.ids.includes(candidate.id)) ? candidate : null;
@@ -2834,24 +2958,29 @@
     if (hover.key !== hoverTargetKey) {
       hideWireTooltip();
       hoverTargetKey = hover.key;
-      cableHoverPointer = pointer;
-      hoverTimer = setTimeout(() => {
-        hoverTimer = null;
-        queueWireTooltip(hoverEventAt(cableHoverPointer));
-      }, hoverDelayMs);
-      return;
+      if (!hover.sleeve) {
+        hoverTimer = setTimeout(() => {
+          hoverTimer = null;
+          queueWireTooltip(hoverEventAt(cableHoverPointer));
+        }, hoverDelayMs);
+      }
     }
     cableHoverPointer = pointer;
     if (hoverTimer === null) showWireTooltip(event, hover);
   }
 
-  function showWireTooltip(event, {port, cable, listedCable}) {
+  function showWireTooltip(event, {port, cable, listedCable, sleeve}) {
+    if (sleeve) {
+      showSleeveHover(sleeve);
+      return;
+    }
     if (!cable) {
       highlightCable(null);
       const key = "port:" + port.id;
       if (key !== tooltipKey) {
         resetTooltipPlacement();
-        tooltip.replaceChildren(renderPortTooltip(port, false));
+        tooltip.removeAttribute("data-tooltip-cable");
+        tooltip.replaceChildren(tooltipEndpoint({port}), renderPortTooltip(port, false));
         tooltip.style.removeProperty("--re-rack-tooltip-accent");
         tooltipKey = key;
       }
@@ -2872,12 +3001,10 @@
     highlightCable(cable, port, far.end);
     const key = cable.id + ":" + far.end + ":" + (port?.id ?? "");
     if (key !== tooltipKey) {
-      renderWireTooltip(cable, far, near);
+      resetTooltipPlacement();
+      renderWireTooltip(cable, near, far);
       if (port) {
-        const details = renderPortTooltip(port, true);
-        const source = tooltip.querySelector(".re-rack-tooltip-source");
-        if (source) source.after(details);
-        else tooltip.append(details);
+        tooltip.querySelector(".re-rack-tooltip-meta").before(renderPortTooltip(port, true));
       }
       tooltipKey = key;
     }
@@ -2937,9 +3064,12 @@
 
   function fitPhotos() {
     const trim = viewTrim.checked;
+    const fit = board.hasAttribute("data-fit") && !board.hasAttribute("data-print-plan");
     const scrollLeft = scroll.scrollLeft;
+    const scrollTop = scroll.scrollTop;
     // Measure the ordinary rack layout, even when a previous crop is active.
     board.removeAttribute("data-trimmed");
+    if (fit) fitRackWidth();
     const layouts = new Map();
     for (const [card, {photo, image}] of photos) {
       const rect = card.getBoundingClientRect();
@@ -2954,9 +3084,15 @@
       photo.style.height = fixed ? height + "px" : "";
       photo.style.setProperty("--re-rack-artwork-scale", width / 1000);
     }
+    if (trim && layouts.size) {
+      trimPhotos(layouts, fit);
+      if (fit) scroll.scrollTop = scrollTop;
+      else scroll.scrollLeft = scrollLeft;
+    }
     fitPortLabels();
-    if (!trim || !layouts.size) return;
+  }
 
+  function trimPhotos(layouts, fit) {
     // Use the same cuts in each face's local coordinates, with room for the stroke and end grips.
     let left = Infinity;
     let right = Infinity;
@@ -2974,22 +3110,32 @@
     const cut = left + right;
     if (!cut) return;
 
-    // Keep very sparse cards wide enough to identify the device.
+    // Keep sparse cards identifiable and limit how much a narrow cluster can enlarge the rack in Fit.
     const shortestCard = Math.min(...Array.from(layouts.values(), ({rect}) => rect.width));
-    const maxCut = Math.max(0, shortestCard - 96);
+    const minimumWidth = fit ? shortestCard / 2 : 96;
+    const maxCut = Math.max(0, shortestCard - minimumWidth);
     const ratio = Math.min(1, maxCut / cut);
     left = Math.floor(left * ratio);
     right = Math.floor(right * ratio);
     if (!left && !right) return;
 
-    const fullWidth = board.getBoundingClientRect().width;
-    const faceCount = rackFace === "both" ? 2 : 1;
-    for (const {photo, rect, width} of layouts.values()) {
-      photo.style.setProperty("--re-rack-trim-photo-left", ((rect.width - width) / 2 - left) + "px");
+    const trimmedWidth = shortestCard - left - right;
+    const scale = fit ? shortestCard / trimmedWidth : 1;
+    if (fit) applyZoomScale(zoomScale * scale);
+    for (const {photo, rect, width, height} of layouts.values()) {
+      if (fit) {
+        photo.style.width = (width * scale) + "px";
+        photo.style.height = (height * scale) + "px";
+        photo.style.setProperty("--re-rack-artwork-scale", width * scale / 1000);
+      }
+      photo.style.setProperty("--re-rack-trim-photo-left", (((rect.width - width) / 2 - left) * scale) + "px");
     }
-    workspace.style.setProperty("--re-rack-trim-width", (fullWidth - faceCount * (left + right)) + "px");
+    if (!fit) {
+      const fullWidth = board.getBoundingClientRect().width;
+      const faceCount = rackFace === "both" ? 2 : 1;
+      workspace.style.setProperty("--re-rack-trim-width", (fullWidth - faceCount * (left + right)) + "px");
+    }
     board.setAttribute("data-trimmed", "");
-    scroll.scrollLeft = scrollLeft;
   }
 
   function relativeRect(element, origin) {
@@ -3006,8 +3152,7 @@
       right: rect.right + padding, bottom: rect.bottom + padding};
   }
 
-  function cutoutPath(rect) {
-    const {left, top, right, bottom} = growRect(rect, .5);
+  function cutoutPath({left, top, right, bottom}) {
     return "M " + left + " " + top + " H " + right + " V " + bottom + " H " + left + " Z";
   }
 
@@ -3020,7 +3165,7 @@
     surface.setAttribute("width", bounds.width);
     surface.setAttribute("height", bounds.height);
     surface.setAttribute("fill", "#fff");
-    const holes = wire(cuts.map(cutoutPath).join(" "), "re-rack-port-cutouts");
+    const holes = wire(Array.from(cuts, cutoutPath).join(" "), "re-rack-port-cutouts");
     holes.setAttribute("fill", "#000");
     target.replaceChildren(surface, holes);
   }
@@ -3028,7 +3173,8 @@
   function computeRoutes(job) {
     return globalThis.NetBoxRackRouting.routeCables(
       job.connections, job.obstacles, job.bounds, job.protectedAreas,
-      {strategy: job.strategy, spacing: job.spacing, deviceClearance: job.deviceClearance},
+      {strategy: job.strategy, spacing: job.spacing, horizontalSpacing: job.horizontalSpacing,
+        deviceClearance: job.deviceClearance},
     );
   }
 
@@ -3045,7 +3191,8 @@
     routingWorker.postMessage({
       connections: job.connections, obstacles: job.obstacles,
       bounds: job.bounds, protectedAreas: job.protectedAreas,
-      strategy: job.strategy, spacing: job.spacing, deviceClearance: job.deviceClearance,
+      strategy: job.strategy, spacing: job.spacing, horizontalSpacing: job.horizontalSpacing,
+      deviceClearance: job.deviceClearance,
       scripts: Array.from(document.querySelectorAll("[data-rack-routing-script]"), script => script.src),
     });
   }
@@ -3094,21 +3241,21 @@
 
   function measureRouting(acceptCable, strategy) {
     fitPhotos();
-    const origin = board.getBoundingClientRect();
+    const origin = wires.getBoundingClientRect();
     const obstacles = Array.from(board.querySelectorAll("[data-route-obstacle]"), card => ({
       id: card.dataset.routeObstacle, ...relativeRect(card, origin),
     }));
     const endpoints = new Map();
     const protectedAreas = [];
-    const cuts = [];
+    const portRects = new Map();
     for (const [port, marker] of markers) {
       if (marker.hidden) continue;
-      const rect = relativeRect(marker, origin);
+      const rect = {port, ...relativeRect(marker, origin)};
       endpoints.set(port, {
         x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2,
         device: marker.closest("[data-route-obstacle]").dataset.routeObstacle, port,
       });
-      cuts.push(rect);
+      portRects.set(port, rect);
       protectedAreas.push({port, kind: "port", ...growRect(rect, .75)});
     }
     const connections = [];
@@ -3121,7 +3268,10 @@
     const bounds = {width: origin.width, height: origin.height};
     const outline = (strategy === "pcb" ? 2.75 : 4) * cableDrawingScale();
     const spacing = Math.ceil(outline + parallelCableGap);
-    return {connections, obstacles, bounds, protectedAreas, endpoints, strategy, cuts, spacing, deviceClearance};
+    const horizontalSpacing = spacing + extraHorizontalGap;
+    const deviceClearance = deviceEdgeClearance + (board.hasAttribute("data-print-plan") ? 5 : outline + 1) / 2;
+    return {connections, obstacles, bounds, protectedAreas, endpoints, strategy, portRects,
+      spacing, horizontalSpacing, deviceClearance};
   }
 
   function routeVisibleCables() {
@@ -3137,15 +3287,14 @@
       board.style.setProperty("--re-rack-extra-bay", routingBay + "px");
       applyElevationSpacing();
     }
-    if (zoom.value === "fit") fitRackZoom();
     const job = measureRouting(cableMatchesDevice, strategy);
-    const {connections, obstacles, bounds, protectedAreas, cuts, spacing, deviceClearance} = job;
-    const key = JSON.stringify([connections, obstacles, bounds, protectedAreas, strategy, spacing, deviceClearance]);
+    const {connections, obstacles, bounds, protectedAreas, portRects, spacing, horizontalSpacing, deviceClearance} = job;
+    const key = JSON.stringify([connections, obstacles, bounds, protectedAreas, strategy, spacing, horizontalSpacing, deviceClearance]);
     if (key !== geometryKey) {
       geometryKey = key;
       geometry = job;
       previewRoute = null;
-      updatePortMask(bounds, cuts);
+      updatePortMask(bounds, portRects.values());
       // At most one worker job and the most recent replacement are in flight.
       const workerThreshold = strategy === "pcb" ? 24 : 40;
       geometryRoutes = connections.length >= workerThreshold && routeInWorker(geometry)
@@ -3243,6 +3392,117 @@
     return group;
   }
 
+  function planVirtualTubes(job, paths, stubs = new Map()) {
+    if (!viewVirtualCombine.checked || paths.size < 3) return {paths: new Map(), tubes: []};
+    const connections = job.connections.filter(({id}) => paths.has(id));
+    const foreignRoutes = new Map(Array.from(stubs, ([id, shape]) => [id, shape.points]));
+    for (const [id, points] of paths) {
+      const cable = cables.get(id);
+      const hasA = job.endpoints.has(cable.a);
+      const hasB = job.endpoints.has(cable.b);
+      const shape = cableShape(points, hasA ? cable.a : cable.b, hasA && hasB ? cable.b : undefined, job);
+      foreignRoutes.set(id, shape.points);
+    }
+    const compactPoints = (id, points) => {
+      const {a, b} = cables.get(id);
+      return cableShape(points, a, b, job, {compact: true}).points;
+    };
+    // Reserve even the widest painted casing so hovering a cable cannot crowd the tube.
+    const foreignStrokeWidth = board.hasAttribute("data-print-plan") ? 5 : 8 * cableDrawingScale();
+    return globalThis.NetBoxRackVirtualCombine.planTubes(connections, portRows, paths, {
+      ...job, deviceEdgeClearance, foreignRoutes, compactPoints, foreignStrokeWidth,
+    });
+  }
+
+  function drawVirtualSleeves(layer, tubes) {
+    const byCable = new Map();
+    const areas = [];
+    const fragment = document.createDocumentFragment();
+    for (const tube of tubes) {
+      const {ids, width, axis = "vertical"} = tube;
+      const horizontal = axis === "horizontal";
+      const left = horizontal ? tube.left : tube.x - width / 2;
+      const right = horizontal ? tube.right : tube.x + width / 2;
+      const top = horizontal ? tube.y - width / 2 : tube.top;
+      const bottom = horizontal ? tube.y + width / 2 : tube.bottom;
+      const sleeve = document.createElementNS(SVG, "g");
+      sleeve.setAttribute("class", "re-rack-wire-sleeve");
+      sleeve.setAttribute("aria-hidden", "true");
+      sleeve.dataset.wireSleeve = ids.join(" ");
+      sleeve.dataset.wireSleeveAxis = axis;
+      const shell = document.createElementNS(SVG, "rect");
+      shell.setAttribute("class", "re-rack-wire-sleeve-shell");
+      shell.setAttribute("x", left);
+      shell.setAttribute("width", right - left);
+      shell.setAttribute("y", top);
+      shell.setAttribute("height", bottom - top);
+      shell.setAttribute("rx", 3);
+      const collars = horizontal
+        ? `M ${left + 4} ${top} V ${bottom} M ${right - 4} ${top} V ${bottom}`
+        : `M ${left} ${top + 4} H ${right} M ${left} ${bottom - 4} H ${right}`;
+      sleeve.append(shell, wire(collars, "re-rack-wire-sleeve-collars"));
+      fragment.append(sleeve);
+      areas.push({sleeve, left, right, top, bottom});
+      for (const id of ids) {
+        if (!byCable.has(id)) byCable.set(id, []);
+        byCable.get(id).push(sleeve);
+      }
+    }
+    layer.replaceChildren(fragment);
+    return {byCable, areas};
+  }
+
+  function sleeveAt(event, target) {
+    if (!sleeveAreas.length || !target || !board.contains(target)) return null;
+    const origin = wires.getBoundingClientRect();
+    const x = event.clientX - origin.left;
+    const y = event.clientY - origin.top;
+    return sleeveAreas.find(area => x >= area.left && x <= area.right && y >= area.top && y <= area.bottom)?.sleeve;
+  }
+
+  function showSleeveHover(sleeve) {
+    if (sleeveHover?.parentElement === sleeve) return;
+    sleeveHover?.remove();
+    sleeveHover = null;
+    if (!sleeve) return;
+
+    const overlay = document.createElementNS(SVG, "g");
+    overlay.dataset.wireSleeveOverlay = "";
+    const clip = document.createElementNS(SVG, "clipPath");
+    clip.id = "re-rack-sleeve-hover-clip";
+    clip.append(sleeve.firstElementChild.cloneNode());
+    const members = document.createElementNS(SVG, "g");
+    members.setAttribute("clip-path", "url(#" + clip.id + ")");
+    const ids = sleeve.dataset.wireSleeve.split(" ").map(Number);
+    const laneWidth = Math.min(1, 8 / ids.length);
+    const cores = document.createDocumentFragment();
+    for (const id of ids) {
+      const cable = cables.get(id);
+      if (!cable) continue;
+      const shape = displayedCableShape(cable, routes?.get(id));
+      if (!shape) continue;
+      const rim = wire(shape.d, "re-rack-wire-sleeve-member", "#fff");
+      rim.setAttribute("stroke-width", laneWidth);
+      members.append(rim);
+      const stroke = wire(shape.d, "re-rack-wire-sleeve-member", cableColor(cable));
+      stroke.setAttribute("stroke-width", laneWidth * .72);
+      stroke.dataset.wireSleeveMember = id;
+      cores.append(stroke);
+    }
+    members.append(cores);
+    overlay.append(clip, members);
+    sleeve.append(overlay);
+    sleeveHover = overlay;
+  }
+
+  function highlightVirtualSleeves(cable) {
+    const next = cableSleeves.get(cable?.id) ?? [];
+    if (next === activeSleeves) return;
+    for (const sleeve of activeSleeves) sleeve.classList.remove("re-rack-wire-sleeve-active");
+    for (const sleeve of next) sleeve.classList.add("re-rack-wire-sleeve-active");
+    activeSleeves = next;
+  }
+
   function drawCablePaths(mode) {
     const pointer = cableHoverPointer;
     const previousHoverKey = hoverTargetKey;
@@ -3251,14 +3511,26 @@
     shownRoutes.clear();
     const group = drawBundles(mode);
     const individualIds = new Set(group?.ids);
+    const visibleRoutes = new Map([...routes].filter(([id]) => mode === "bundles"
+      ? individualIds.has(id) : mode === "all" || id === selectedCable?.id));
+    const stubCandidates = mode === "bundles"
+      ? group ? [] : Array.from(cableButtons, ([id, row]) => row.hidden ? null : cables.get(id)).filter(Boolean)
+      : cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
+    const stubs = new Map();
+    for (const cable of stubCandidates) {
+      if (!cableMatchesDevice(cable) || routes.has(cable.id)) continue;
+      const shape = visibleCablePath(cable);
+      if (shape?.stub) stubs.set(cable.id, shape);
+    }
+    const combined = planVirtualTubes(geometry, visibleRoutes, stubs);
+    combinedRoutes = combined.paths;
     const fragment = document.createDocumentFragment();
     const handles = document.createDocumentFragment();
     let selection = [];
-    for (const [id, route] of routes) {
+    for (const [id, route] of visibleRoutes) {
       const cable = cables.get(id);
       const active = cable === selectedCable;
-      if (mode === "bundles" ? !individualIds.has(id) : !active && mode !== "all") continue;
-      const {d: path, points} = cableShape(route, cable.a, cable.b);
+      const {d: path, points} = displayedCableShape(cable, route);
       shownRoutes.set(id, points);
       const color = cableColor(cable);
       const stroke = wire(path, "re-rack-wire" + (active ? " re-rack-wire-selected" : ""), color);
@@ -3279,33 +3551,31 @@
         if (b) handles.append(...cableHandle(cable, cable.b, b.x, b.y, color));
       }
     }
-    const stubCandidates = mode === "bundles"
-      ? group ? [] : Array.from(cableButtons, ([id, row]) => row.hidden ? null : cables.get(id)).filter(Boolean)
-      : cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
-    for (const cable of stubCandidates) {
-      if (!cableMatchesDevice(cable) || routes.has(cable.id)) continue;
-      const visible = visibleCablePath(cable);
-      if (visible?.stub) {
-        const active = cable === selectedCable;
-        const color = cableColor(cable);
-        const path = visible.d;
-        const style = active ? " re-rack-wire-selected re-rack-wire-selected-stub" : " re-rack-wire-focus-stub";
-        const stroke = wire(path, "re-rack-wire" + style, color);
-        stroke.dataset.wireVisual = cable.id;
-        const strokes = cableStrokes(stroke, color, cable.id);
-        if (cableFocusDevice || mode === "bundles") {
-          const hit = wire(path, "re-rack-wire-hit");
-          hit.dataset.wire = cable.id;
-          shownRoutes.set(cable.id, visible.points);
-          strokes.push(hit);
-        }
-        if (active) selection.push(...strokes);
-        else fragment.append(...strokes);
+    for (const [id, visible] of stubs) {
+      const cable = cables.get(id);
+      const active = cable === selectedCable;
+      const color = cableColor(cable);
+      const path = visible.d;
+      const style = active ? " re-rack-wire-selected re-rack-wire-selected-stub" : " re-rack-wire-focus-stub";
+      const stroke = wire(path, "re-rack-wire" + style, color);
+      stroke.dataset.wireVisual = id;
+      const strokes = cableStrokes(stroke, color, id);
+      if (cableFocusDevice || mode === "bundles") {
+        const hit = wire(path, "re-rack-wire-hit");
+        hit.dataset.wire = id;
+        shownRoutes.set(id, visible.points);
+        strokes.push(hit);
       }
+      if (active) selection.push(...strokes);
+      else fragment.append(...strokes);
     }
     fragment.append(...selection);
     wireLayer.replaceChildren(fragment);
     handleLayer.replaceChildren(handles);
+    const sleeves = drawVirtualSleeves(sleeveLayer, combined.tubes);
+    cableSleeves = sleeves.byCable;
+    sleeveAreas = sleeves.areas;
+    highlightVirtualSleeves(hoveredCable ?? selectedCable);
     if (pointer && !waitingForHover) {
       const event = hoverEventAt(pointer);
       const hover = wireHoverTarget(event);
@@ -3333,7 +3603,9 @@
         const a = geometry.endpoints.get(source);
         const b = geometry.endpoints.get(target);
         if (a && b) {
-          previewLayer.append(wire(pathData([a, b]), "re-rack-wire re-rack-wire-staged-connect", "#25966c"));
+          const shape = cableShape([a, b], source, target);
+          previewLayer.append(wire(shape.d, "re-rack-wire-rim"),
+            wire(shape.d, "re-rack-wire re-rack-wire-staged-connect", "#25966c"));
         }
       }
     }
@@ -3344,7 +3616,7 @@
       : gesture.port.id;
     const a = geometry.endpoints.get(previewOrigin) ?? geometry.endpoints.get(gesture.port.id);
     if (!a) return;
-    const origin = board.getBoundingClientRect();
+    const origin = wires.getBoundingClientRect();
     const target = geometry.endpoints.get(dropTarget?.id);
     const b = target ?? {x: gesture.x - origin.left, y: gesture.y - origin.top};
     if (b.x < 0 || b.x > origin.width || b.y < 0 || b.y > origin.height) return;
@@ -3352,15 +3624,19 @@
     if (target) {
       if (previewRoute?.from !== a.port || previewRoute?.to !== b.port) {
         const connection = {id: "preview", a, b};
-        const {obstacles, bounds, protectedAreas, strategy, spacing, deviceClearance} = geometry;
+        const {obstacles, bounds, protectedAreas, strategy, spacing, horizontalSpacing, deviceClearance} = geometry;
         const paths = globalThis.NetBoxRackRouting.routeCables(
-          [connection], obstacles, bounds, protectedAreas, {strategy, spacing, deviceClearance},
+          [connection], obstacles, bounds, protectedAreas, {strategy, spacing, horizontalSpacing, deviceClearance},
         );
         previewRoute = {from: a.port, to: b.port, points: paths.get(connection.id)};
       }
       points = previewRoute.points;
     }
-    previewLayer.append(wire(cableShape(points, a.port, b.port).d, "re-rack-wire re-rack-wire-preview", "#36baff"));
+    const marker = target && visibleMarker(target.port);
+    const targetRect = marker ? {port: target.port, ...relativeRect(marker, origin)} : undefined;
+    const shape = cableShape(points, a.port, b.port, geometry, {targetRect});
+    previewLayer.append(wire(shape.d, "re-rack-wire-rim"),
+      wire(shape.d, "re-rack-wire re-rack-wire-preview", "#36baff"));
   }
 
   function invalidateRoutes() {
@@ -3528,7 +3804,6 @@
         preferredSourceDevice,
       } : null;
       history.replaceState({...history.state, reRackEditor: {
-        cableId: deleting || batching || restoring ? null : payload.id,
         left: scroll.scrollLeft,
         top: scroll.scrollTop,
         zoom: zoom.value,
@@ -3651,6 +3926,7 @@
   function saveViewPreferences() {
     writeViewPreferences(viewPreferencesKey, {
       connections: viewConnections.checked, directory: viewDirectory.checked, trim: viewTrim.checked,
+      virtualCombine: viewVirtualCombine.checked,
       connectionsOpen: connectionsSection.open, directoryOpen: directorySection.open,
       zoom: zoom.value, lines: lines.value, images: deviceImages.value,
       interfaceHighlight: interfaceHighlight.value, routingStrategy: routingStrategy.value, portFill: portFill.value,
@@ -3695,45 +3971,18 @@
     applyElevationSpacing();
   }
 
-  function fitRackZoom() {
+  function fitRackWidth() {
     if (!elevationSpacing || !scroll.clientWidth) return;
-    // Fit measures the viewport before the optional port crop is reapplied by fitPhotos().
-    board.removeAttribute("data-trimmed");
     const viewportHeight = window.visualViewport?.height ?? document.documentElement.clientHeight;
     const scrollTop = Math.max(0, scroll.getBoundingClientRect().top);
     const fitHeight = Math.max(160, Math.floor(viewportHeight - scrollTop - 12));
-    const style = getComputedStyle(board);
-    const activeFaces = facePanels.filter(face => !face.hidden);
-    const gutterWidth = activeFaces.length > 1 ? parseFloat(style.gridTemplateColumns.split(" ")[1]) || 0 : 0;
-    const labelWidth = elevationSpacing.rows[0]?.tick.firstElementChild.offsetWidth ?? 0;
-    const innerWidth = scroll.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-    const cardWidth = (innerWidth - gutterWidth) / activeFaces.length - labelWidth;
-    const widthScale = cardWidth / (baseRackUnit * rackFaceAspect);
-
-    const headingHeight = Math.max(...activeFaces.map(face =>
-      face.querySelector("[data-elevation]").getBoundingClientRect().top - face.getBoundingClientRect().top,
-    ));
-    const innerHeight = fitHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - headingHeight - 2;
-    const {gaps, rowCount} = elevationSpacing;
-    const scaleToFit = defaultsVisible => {
-      const gapHeight = gaps.reduce((height, gap) => height +
-        (defaultsVisible || savedGaps.has(gap.key) ? virtualGapSize(gap) : 0), 0);
-      const unitsHeight = baseRackUnit * rowCount;
-      const proportional = innerHeight / (unitsHeight + gapHeight);
-      const heightScale = proportional >= minimumGapScale ? proportional
-        : (innerHeight - gapHeight * minimumGapScale) / unitsHeight;
-      return Math.min(widthScale, heightScale);
-    };
-    const defaultsVisible = defaultElevationGapsVisible(1);
-    let scale = scaleToFit(defaultsVisible);
-    // At more than 100%, the default gaps also consume part of the viewport.
-    if (!defaultsVisible && scale > 1) scale = Math.max(1, scaleToFit(true));
-    // Keep the unit labels and ports usable on very small screens or very tall racks.
-    const fitted = Math.max(.25, Math.floor(scale * 1000) / 1000);
     const maxHeight = fitHeight + "px";
     if (workspace.style.getPropertyValue("--re-rack-fit-height") !== maxHeight) {
       workspace.style.setProperty("--re-rack-fit-height", maxHeight);
     }
+    // The grid has already reserved the unit rail, the routing bays and the gap between faces.
+    const face = facePanels.find(panel => !panel.hidden);
+    const fitted = Math.max(.25, face.getBoundingClientRect().width / (baseRackUnit * rackFaceAspect));
     if (fitted !== zoomScale) applyZoomScale(fitted);
   }
 
@@ -3743,9 +3992,7 @@
     board.toggleAttribute("data-fit", fit);
     if (fit) {
       board.style.setProperty("--re-rack-fit-cable-scale", cableDrawingScale());
-      fitRackZoom();
-    }
-    else {
+    } else {
       workspace.style.removeProperty("--re-rack-fit-height");
       applyZoomScale(Number(zoom.value));
     }
@@ -3851,6 +4098,9 @@
     hideWireTooltip();
     drawTracePreview(null);
     wireLayer.replaceChildren();
+    sleeveLayer.replaceChildren();
+    sleeveAreas = [];
+    combinedRoutes.clear();
     handleLayer.replaceChildren();
     previewLayer.replaceChildren();
     shownRoutes.clear();
@@ -3976,6 +4226,8 @@
   viewConnections.checked = viewPreferences.connections !== false;
   viewDirectory.checked = viewPreferences.directory !== false;
   viewTrim.checked = viewPreferences.trim === true;
+  viewVirtualCombine.checked = viewPreferences.virtualCombine === true;
+  board.toggleAttribute("data-virtual-combine", viewVirtualCombine.checked);
   connectionsSection.open = viewPreferences.connectionsOpen !== false;
   directorySection.open = viewPreferences.directoryOpen !== false;
   restoreSelect(zoom, viewPreferences.zoom);
@@ -4149,6 +4401,12 @@
       saveViewPreferences();
     });
   }
+  viewVirtualCombine.addEventListener("change", () => {
+    board.toggleAttribute("data-virtual-combine", viewVirtualCombine.checked);
+    drawnMode = null;
+    invalidateRoutes();
+    saveViewPreferences();
+  });
   for (const section of [connectionsSection, directorySection]) {
     section.addEventListener("toggle", saveViewPreferences);
   }
@@ -4253,6 +4511,11 @@
   for (const dialog of [createDialog, editDialog, moveDialog, historyDialog]) {
     dialog.addEventListener("cancel", (event) => {
       if (busy) event.preventDefault();
+    });
+  }
+  for (const dialog of editor.querySelectorAll("dialog")) {
+    dialog.addEventListener("close", () => {
+      if (selectedCable && !editor.querySelector("dialog[open]")) selectCable(null);
     });
   }
 
@@ -4441,8 +4704,6 @@
     filterDirectory();
     setZoom();
     requestAnimationFrame(() => scroll.scrollTo(restore.left, restore.top));
-    const restoredCable = cables.get(restore.cableId);
-    if (quickMode === "normal" && restoredCable && cableHasPortInView(restoredCable)) selectCable(restoredCable);
     if (restore.message) announce(restore.message);
   } else {
     setZoom();

@@ -1,4 +1,5 @@
 from decimal import Decimal
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from django.conf import settings
 from django.test import Client
@@ -80,6 +81,58 @@ class CableEditorTestCase(TestCase):
         rack_data = response.context["rack_data"]
         self.assertEqual(rack_data["cables"][0]["status"], "Connected")
         self.assertIn({"value": LinkStatusChoices.STATUS_CONNECTED, "label": "Connected"}, rack_data["cableStatuses"])
+
+    def test_manual_connect_prefills_supported_free_ports_in_native_form(self):
+        front = FrontPort.objects.create(device=self.first, name="Front", type=PortTypeChoices.TYPE_8P8C)
+        rear = RearPort.objects.create(device=self.first, name="Rear", type=PortTypeChoices.TYPE_8P8C)
+        virtual = Interface.objects.create(device=self.first, name="Virtual", type=InterfaceTypeChoices.TYPE_VIRTUAL)
+        Cable.objects.create(a_terminations=[self.b], b_terminations=[self.external_port])
+        rack_url = reverse("plugins:netbox_rack_editor:rack", args=[self.rack.pk])
+
+        def connection_urls():
+            data = self.client.get(rack_url).context["rack_data"]
+            return {port["id"]: port["manualConnectUrl"] for device in data["devices"] for port in device["ports"]}
+
+        self.assertIsNone(connection_urls()[self.a.pk])
+        self.add_permissions("dcim.add_cable", "dcim.view_frontport", "dcim.view_rearport")
+        urls = connection_urls()
+        self.assertIsNone(urls[virtual.pk])
+        self.assertIsNone(urls[self.b.pk])
+        for port in (self.a, front, rear):
+            with self.subTest(port=port):
+                url = urls[port_key(type(port), port.pk)]
+                self.assertEqual(urlsplit(url).path, reverse("dcim:cable_add"))
+                form = self.client.get(url).context["form"]
+                self.assertEqual(form["a_terminations_type"].value(), port._meta.label_lower)
+                self.assertEqual(list(map(str, form["a_terminations"].value())), [str(port.pk)])
+                self.assertEqual(form["b_terminations_type"].value(), "dcim.interface")
+                self.assertIn("termination_b_device", form.fields)
+
+    def test_native_manual_connect_links_to_an_unracked_device(self):
+        self.add_permissions("dcim.add_cable")
+        self.external.rack = None
+        self.external.save(update_fields=("rack",))
+        rack_url = reverse("plugins:netbox_rack_editor:rack", args=[self.rack.pk])
+        return_url = f"{rack_url}?devices={self.first.pk}&face=front"
+        rack_data = self.client.get(return_url).context["rack_data"]
+        source = next(port for device in rack_data["devices"] for port in device["ports"] if port["id"] == self.a.pk)
+        url = source["manualConnectUrl"]
+        response = self.client.post(f"{url}&{urlencode({'return_url': return_url})}", {
+            **parse_qs(urlsplit(url).query),
+            "termination_a_device": [self.first.pk],
+            "termination_b_device": [self.external.pk],
+            "b_terminations": [self.external_port.pk],
+            "status": LinkStatusChoices.STATUS_CONNECTED,
+            "profile": CableProfileChoices.SINGLE_1C1P,
+        })
+        if response.status_code != 302:
+            self.fail(f"Native cable form rejected the connection: {response.context['form'].errors}")
+        self.assertRedirects(response, return_url)
+        cable = Cable.objects.get()
+        self.assertEqual(cable.a_terminations, [self.a])
+        self.assertEqual(cable.b_terminations, [self.external_port])
+        data = self.client.get(return_url).context["rack_data"]
+        self.assertEqual(data["cables"][0]["endpointB"]["deviceName"], self.external.name)
 
     def test_create_then_move_cable(self):
         self.add_permissions("dcim.add_cable", "dcim.change_cable")

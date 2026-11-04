@@ -31,7 +31,9 @@ services:
       REDIS_CACHE_DATABASE: "1"
       SECRET_KEY: dev-only-netbox-rack-editor-9Z7v-local-only-secret-key
       ALLOWED_HOSTS: localhost 127.0.0.1 testserver
-      SKIP_SUPERUSER: "true"
+      SUPERUSER_NAME: test
+      SUPERUSER_EMAIL: test@example.invalid
+      SUPERUSER_PASSWORD: test
       PYTHONPATH: /plugin
     ports:
       - "127.0.0.1:8096:8080"

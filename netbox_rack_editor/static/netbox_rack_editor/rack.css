@@ -419,13 +419,17 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-board {
   --re-rack-board-min-width: 46rem;
-  --re-rack-route-space-start: .9rem;
+  --re-rack-unit-width: 2.2rem;
+  --re-rack-wire-start: calc(var(--re-rack-unit-width) + 1rem);
+  --re-rack-route-space-start: 3.1rem;
   --re-rack-route-space-end: 2rem;
-  --re-rack-route-top: 1.55rem;
-  --re-rack-route-bottom: 1.55rem;
+  --re-rack-route-top: calc(1.55rem + 10px);
+  --re-rack-route-bottom: calc(1.55rem + 10px);
   --re-rack-extra-bay: 0px;
   --re-rack-side-bay: var(--re-rack-extra-bay);
+  --re-rack-sleeve-side-bay: 0px;
   --re-rack-end-bay: calc(var(--re-rack-extra-bay) / 3);
+  --re-rack-board-top: calc(var(--re-rack-route-top) + var(--re-rack-end-bay));
   --re-rack-detail-scale: 1;
   --re-rack-cable-scale: 1;
   position: relative;
@@ -433,11 +437,20 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   display: grid;
   grid-template-columns: minmax(0, 1fr) 4.25rem minmax(0, 1fr);
   min-width: calc(var(--re-rack-zoom, 1) * var(--re-rack-board-min-width) +
-    var(--re-rack-route-space-start) + var(--re-rack-route-space-end) + 2 * var(--re-rack-side-bay));
-  padding-block: calc(var(--re-rack-route-top) + var(--re-rack-end-bay))
+    var(--re-rack-wire-start) + var(--re-rack-route-space-start) + var(--re-rack-route-space-end) +
+    2 * (var(--re-rack-side-bay) + var(--re-rack-sleeve-side-bay)));
+  padding-block: var(--re-rack-board-top)
     calc(var(--re-rack-route-bottom) + var(--re-rack-end-bay));
-  padding-inline: calc(.75rem + var(--re-rack-route-space-start) + var(--re-rack-side-bay))
-    calc(.75rem + var(--re-rack-route-space-end) + var(--re-rack-side-bay));
+  padding-inline: calc(var(--re-rack-wire-start) + .75rem + var(--re-rack-route-space-start) + var(--re-rack-side-bay) + var(--re-rack-sleeve-side-bay))
+    calc(.75rem + var(--re-rack-route-space-end) + var(--re-rack-side-bay) + var(--re-rack-sleeve-side-bay));
+}
+
+@media (min-width: 100rem) {
+  .re-rack-board[data-virtual-combine][data-routing-strategy="balanced"] { --re-rack-sleeve-side-bay: 12px; }
+}
+
+@media (width < 100rem) {
+  .re-rack-board[data-virtual-combine][data-routing-strategy="pcb"] { --re-rack-sleeve-side-bay: min(24px, 2vw); }
 }
 
 .re-rack-board:is([data-rack-face="front"], [data-rack-face="rear"]) {
@@ -446,11 +459,10 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-board[data-routing-strategy="pcb"] {
-  /* The unit labels already leave room for lanes on the start side. */
-  --re-rack-route-space-start: 5rem;
+  --re-rack-route-space-start: 7.2rem;
   --re-rack-route-space-end: 7.5rem;
-  --re-rack-route-top: 4.25rem;
-  --re-rack-route-bottom: 5.75rem;
+  --re-rack-route-top: calc(4.25rem + 10px);
+  --re-rack-route-bottom: calc(5.75rem + 10px);
 }
 
 .re-rack-board[data-routing-strategy="pcb"][data-rack-face="both"] {
@@ -464,13 +476,13 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   --re-rack-marker-clearance: 2px;
   --re-rack-side-bay: min(var(--re-rack-extra-bay), 8%);
   --re-rack-end-bay: min(calc(var(--re-rack-extra-bay) / 3), 3vw);
-  --re-rack-route-space-start: clamp(.45rem, 2%, .9rem);
+  --re-rack-route-space-start: calc(2.2rem + clamp(.45rem, 2%, .9rem));
   --re-rack-route-space-end: clamp(1rem, 4%, 2rem);
   min-width: 0;
 }
 
 .re-rack-board[data-fit]:not([data-print-plan])[data-routing-strategy="pcb"] {
-  --re-rack-route-space-start: clamp(1.35rem, 7%, 5rem);
+  --re-rack-route-space-start: calc(2.2rem + clamp(1.35rem, 7%, 5rem));
   --re-rack-route-space-end: clamp(1.8rem, 10%, 7.5rem);
 }
 
@@ -487,12 +499,15 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   min-width: 0;
 }
 
+.re-rack-board[data-fit][data-trimmed]:not([data-print-plan]) { width: auto; }
+
 .re-rack-board[data-print-plan] {
+  --re-rack-board-top: calc(var(--re-rack-route-top) + 28px);
   min-width: 0;
   width: var(--re-rack-print-width);
-  padding-inline: calc(.75rem + var(--re-rack-route-space-start) + var(--re-rack-print-bay))
+  padding-inline: calc(var(--re-rack-wire-start) + .75rem + var(--re-rack-route-space-start) + var(--re-rack-print-bay))
     calc(.75rem + var(--re-rack-route-space-end) + var(--re-rack-print-bay));
-  padding-block: calc(var(--re-rack-route-top) + 28px) calc(var(--re-rack-route-bottom) + 28px);
+  padding-block: var(--re-rack-board-top) calc(var(--re-rack-route-bottom) + 28px);
 }
 
 .re-rack-board[data-print-plan][data-trimmed] { width: var(--re-rack-trim-width); }
@@ -509,6 +524,14 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-face { min-width: 0; }
+
+.re-rack-unit-column {
+  position: absolute;
+  z-index: 3;
+  inset-block-start: var(--re-rack-board-top);
+  inset-inline-start: .35rem;
+  inline-size: var(--re-rack-unit-width);
+}
 
 .re-rack-face-heading {
   font-size: .75rem;
@@ -551,11 +574,10 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   align-self: stretch;
   display: grid;
   place-items: center;
-  width: 2.2rem;
+  inline-size: 100%;
   font-variant-numeric: tabular-nums;
   color: var(--tblr-secondary-color, #576479);
   background: var(--re-rack-bg);
-  border-inline-end: 1px solid var(--re-rack-border);
   font-size: clamp(8px, calc(.69rem * var(--re-rack-detail-scale)), 18px);
   font-weight: 600;
 }
@@ -574,7 +596,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   align-items: center;
   justify-content: center;
   gap: 2px;
-  inline-size: 2.2rem;
+  inline-size: 100%;
   block-size: var(--re-rack-gap-size, 20px);
   pointer-events: none;
 }
@@ -619,7 +641,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-device {
   position: absolute;
-  inset-inline: 2.2rem 0;
+  inset-inline: 0;
   top: calc(var(--re-rack-unit) * var(--re-device-top) + var(--re-device-offset, 0px));
   height: calc(var(--re-rack-unit) * var(--re-device-height));
   background: #253448;
@@ -844,8 +866,9 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-wires {
   position: absolute;
   z-index: 2;
-  inset: 0;
-  width: 100%;
+  inset-block: 0;
+  inset-inline-start: var(--re-rack-wire-start);
+  width: calc(100% - var(--re-rack-wire-start));
   height: 100%;
   overflow: visible;
   pointer-events: none;
@@ -873,8 +896,8 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-bundle-casing {
-  stroke: var(--re-rack-surface);
-  stroke-width: calc(7px * var(--re-rack-cable-scale));
+  stroke: #fff;
+  stroke-width: calc(4px * var(--re-rack-cable-scale) + 1.5px);
 }
 
 .re-rack-bundle-hit {
@@ -906,9 +929,37 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-bundle[role="button"] .re-rack-bundle-badge { pointer-events: all; cursor: pointer; }
 .re-rack-bundle[role="button"]:focus-visible .re-rack-bundle-badge { stroke-width: 2.5px; }
 
+.re-rack-wire-sleeve {
+  fill: color-mix(in srgb, var(--re-rack-text) 14%, var(--re-rack-bg));
+  stroke: color-mix(in srgb, var(--re-rack-text) 45%, var(--re-rack-bg));
+  stroke-width: 1px;
+  pointer-events: none;
+}
+
+.re-rack-wire-sleeve-collars { fill: none; }
+
+.re-rack-wire-sleeve-member {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.re-rack-wire-sleeve-active {
+  fill: color-mix(in srgb, var(--re-rack-trace-accent) 18%, var(--re-rack-bg));
+  stroke: var(--re-rack-trace-accent);
+  stroke-width: 1.5px;
+}
+
+.re-rack-wire-sleeve:has(> [data-wire-sleeve-overlay]) > .re-rack-wire-sleeve-shell {
+  fill: #182638;
+  stroke: color-mix(in srgb, var(--re-rack-target) 60%, var(--re-rack-text));
+}
+
 .re-rack-wire,
 .re-rack-wire-casing,
 .re-rack-wire-contrast,
+.re-rack-wire-rim,
 .re-rack-wire-hover-stub,
 .re-rack-wire-trace-casing,
 .re-rack-wire-trace,
@@ -924,11 +975,24 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   pointer-events: none;
 }
 
-.re-rack-wire-contrast {
+:is(.re-rack-wire-contrast, .re-rack-wire-rim) {
+  --re-rack-outline-width: calc(4px * var(--re-rack-cable-scale));
   display: none;
-  stroke-width: calc(4px * var(--re-rack-cable-scale));
+  stroke-width: var(--re-rack-outline-width);
   opacity: .72;
   pointer-events: none;
+}
+
+.re-rack-wire-rim {
+  display: inline;
+  stroke: #fff;
+  opacity: .9;
+}
+
+/* The white rim extends past the inner contrast stroke whenever it is visible. */
+:where(:root:not([data-bs-theme="dark"])) .re-rack-wire-rim:has(+ .re-rack-wire-contrast-light),
+:where(:root[data-bs-theme="dark"]) .re-rack-wire-rim:has(+ .re-rack-wire-contrast-dark) {
+  stroke-width: calc(var(--re-rack-outline-width) + 1px);
 }
 
 :root:not([data-bs-theme="dark"]) .re-rack-wire-contrast-light {
@@ -946,32 +1010,42 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   opacity: 1;
 }
 
-[data-routing-strategy="pcb"] .re-rack-wire[data-wire-visual]:not(.re-rack-wire-selected, .re-rack-wire-focus-stub) {
+[data-routing-strategy="pcb"] .re-rack-wire[data-wire-visual]:not(.re-rack-wire-selected, .re-rack-wire-focus-stub, .re-rack-wire-print) {
   stroke-width: calc(1.65px * var(--re-rack-cable-scale));
 }
 
-[data-routing-strategy="pcb"] .re-rack-wire-contrast:has(+ [data-wire-visual]:not(.re-rack-wire-selected, .re-rack-wire-focus-stub)) {
-  stroke-width: calc(2.75px * var(--re-rack-cable-scale));
+[data-routing-strategy="pcb"] :is(.re-rack-wire-contrast, .re-rack-wire-rim):has(
+  + [data-wire-visual]:not(.re-rack-wire-selected, .re-rack-wire-focus-stub, .re-rack-wire-print),
+  + .re-rack-wire-contrast + [data-wire-visual]:not(.re-rack-wire-selected, .re-rack-wire-focus-stub, .re-rack-wire-print)) {
+  --re-rack-outline-width: calc(2.75px * var(--re-rack-cable-scale));
 }
 
-.re-rack-wire-contrast:has(+ .re-rack-wire-selected) { stroke-width: calc(5px * var(--re-rack-cable-scale)); }
-.re-rack-wire-contrast:has(+ .re-rack-wire-hovered) { stroke-width: calc(6px * var(--re-rack-cable-scale)); }
+:is(.re-rack-wire-contrast, .re-rack-wire-rim):has(+ .re-rack-wire-selected, + .re-rack-wire-contrast + .re-rack-wire-selected) {
+  --re-rack-outline-width: calc(5px * var(--re-rack-cable-scale));
+}
 
-.re-rack-wire-contrast:has(+ :is(.re-rack-wire-hover-stub, .re-rack-wire-selected-stub, .re-rack-wire-focus-stub)) {
-  stroke-width: calc(5px * var(--re-rack-cable-scale));
+:is(.re-rack-wire-contrast, .re-rack-wire-rim):has(+ .re-rack-wire-hovered, + .re-rack-wire-contrast + .re-rack-wire-hovered) {
+  --re-rack-outline-width: calc(6px * var(--re-rack-cable-scale));
+}
+
+:is(.re-rack-wire-contrast, .re-rack-wire-rim):has(
+  + :is(.re-rack-wire-hover-stub, .re-rack-wire-selected-stub, .re-rack-wire-focus-stub),
+  + .re-rack-wire-contrast + :is(.re-rack-wire-hover-stub, .re-rack-wire-selected-stub, .re-rack-wire-focus-stub)) {
+  --re-rack-outline-width: calc(5px * var(--re-rack-cable-scale));
   stroke-dasharray: 5 4;
 }
 
-.re-rack-wires-hovering .re-rack-wire-contrast:has(+ .re-rack-wire:not(.re-rack-wire-hovered)) {
+.re-rack-wires-hovering :is(.re-rack-wire-contrast, .re-rack-wire-rim):has(
+  + .re-rack-wire:not(.re-rack-wire-hovered), + .re-rack-wire-contrast + .re-rack-wire:not(.re-rack-wire-hovered)) {
   opacity: .30;
 }
 
-.re-rack-wire-contrast:has(+ .re-rack-wire-staged-unplug) {
+:is(.re-rack-wire-contrast, .re-rack-wire-rim):has(+ .re-rack-wire-staged-unplug, + .re-rack-wire-contrast + .re-rack-wire-staged-unplug) {
   opacity: .24;
   stroke-dasharray: 3 5;
 }
 
-.re-rack-wire-contrast + .re-rack-wire-staged-unplug { opacity: .30; }
+:is(.re-rack-wire-contrast, .re-rack-wire-rim) + .re-rack-wire-staged-unplug { opacity: .30; }
 
 .re-rack-wire-casing {
   stroke: var(--re-rack-surface);
@@ -995,8 +1069,15 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   opacity: 1;
 }
 
-.re-rack-wire-preview { stroke-dasharray: 6 4; }
-.re-rack-wire-staged-connect { opacity: .78; stroke-dasharray: 4 4; }
+.re-rack-wire-rim:has(+ .re-rack-wire-preview) {
+  --re-rack-outline-width: calc(3.5px * var(--re-rack-cable-scale) + 1.5px);
+}
+
+.re-rack-wire-preview,
+.re-rack-wire-rim:has(+ .re-rack-wire-preview) { stroke-dasharray: 6 4; }
+.re-rack-wire-staged-connect { opacity: .78; }
+.re-rack-wire-staged-connect,
+.re-rack-wire-rim:has(+ .re-rack-wire-staged-connect) { stroke-dasharray: 4 4; }
 .re-rack-wire-staged-unplug { opacity: .3; stroke-dasharray: 3 5; }
 
 .re-rack-wire-hover-stub,
@@ -1022,8 +1103,9 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 .re-rack-wire-trace-casing {
-  stroke: var(--re-rack-surface);
-  stroke-width: calc(5.5px * var(--re-rack-cable-scale));
+  stroke: #fff;
+  stroke-width: calc(2.75px * var(--re-rack-cable-scale) + 1.5px);
+  stroke-dasharray: 5 4;
   opacity: .92;
   pointer-events: none;
 }
@@ -1088,7 +1170,9 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 }
 
 [data-print-plan] .re-rack-wire-print { opacity: 1; stroke-width: 2.3px; }
-[data-print-plan] .re-rack-wire-contrast { stroke-width: 3.6px; }
+[data-print-plan] :is(.re-rack-wire-contrast, .re-rack-wire-rim) { --re-rack-outline-width: 3.6px; }
+[data-print-plan] :is(.re-rack-wire-contrast, .re-rack-wire-rim):has(
+  + .re-rack-wire-print-stub, + .re-rack-wire-contrast + .re-rack-wire-print-stub),
 [data-print-plan] .re-rack-wire-print-stub { stroke-dasharray: 6 4; }
 
 .re-rack-tooltip-guide {
@@ -1145,6 +1229,20 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   min-width: 0;
   max-width: min(14rem, calc(100vw - 1.5rem));
   padding: .35rem;
+}
+
+.re-rack-tooltip[data-tooltip-cable]:not([data-docked]) {
+  min-width: min(20rem, calc(100vw - 1.5rem));
+  max-width: min(27rem, calc(100vw - 1.5rem));
+}
+
+.re-rack-tooltip[data-tooltip-cable][data-compact]:not([data-docked]) {
+  width: min(17rem, calc(100vw - 1.5rem));
+  min-width: 0;
+}
+
+.re-rack-tooltip[data-tooltip-cable][data-narrow]:not([data-docked]) {
+  width: min(8rem, calc(100vw - 1.5rem));
 }
 
 .re-rack-tooltip-dock {
@@ -1226,21 +1324,125 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   font-size: .69rem;
 }
 
-.re-rack-tooltip-source,
+.re-rack-tooltip-endpoints {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: .32rem;
+  min-width: 0;
+  direction: ltr;
+}
+
+.re-rack-tooltip-direction {
+  display: grid;
+  place-items: center;
+  place-self: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  border: 1px solid color-mix(in srgb, var(--re-rack-tooltip-ink) 28%, var(--re-rack-border));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--re-rack-tooltip-ink) 9%, var(--re-rack-surface));
+  color: var(--re-rack-tooltip-ink);
+  font-size: 1.1rem;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.re-rack-tooltip[data-narrow]:not([data-docked]) .re-rack-tooltip-endpoints {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.re-rack-tooltip[data-narrow]:not([data-docked]) .re-rack-tooltip-direction {
+  transform: rotate(90deg);
+}
+
+.re-rack-tooltip-endpoint {
+  box-sizing: border-box;
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: .18rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: .42rem;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .45rem;
+  background: var(--re-rack-bg);
+}
+
+.re-rack-tooltip-endpoint[data-tooltip-target] {
+  border-color: color-mix(in srgb, var(--re-rack-tooltip-ink) 35%, var(--re-rack-border));
+  background: color-mix(in srgb, var(--re-rack-tooltip-ink) 8%, var(--re-rack-surface));
+}
+
+.re-rack-tooltip-endpoint-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .16rem .36rem;
+}
+
+.re-rack-tooltip-end-badge {
+  padding: .07rem .29rem;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .25rem;
+  background: var(--re-rack-surface);
+  font-size: .65rem;
+  font-weight: 750;
+}
+
+.re-rack-tooltip-endpoint-role {
+  color: var(--re-rack-tooltip-ink);
+  font-size: .67rem;
+  font-weight: 650;
+}
+
+.re-rack-tooltip-endpoint-name {
+  font-size: .82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.re-rack-tooltip-port-preview {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: var(--re-rack-preview-width);
+  max-width: 100%;
+  margin-block: .25rem .12rem;
+  padding: .12em .14em;
+  border: 3px solid;
+  border-block-color: var(--re-port-stroke-block, var(--re-port-stroke));
+  border-inline-color: var(--re-port-stroke-inline, var(--re-port-stroke));
+  border-radius: .28rem;
+  background: var(--re-port-color);
+  box-shadow: 0 0 0 1px var(--re-rack-port-keyline), inset 0 0 0 1px var(--re-rack-port-keyline);
+  color: #fff;
+  font-family: system-ui, sans-serif;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: normal;
+  text-align: center;
+}
+
+.re-rack[data-port-fill="vlan"] .re-rack-tooltip-port-preview {
+  background: var(--re-port-vlan-color, var(--re-rack-muted-port));
+}
+
+.re-rack-tooltip-preview-label {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  padding-inline: .09em;
+  border-radius: .15rem;
+  background: #111c2eee;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
 .re-rack-tooltip-meta {
   min-width: 0;
   padding-inline: .2rem;
   color: var(--re-rack-tooltip-muted);
-}
-
-.re-rack-tooltip-source {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: .12rem .3rem;
-}
-
-.re-rack-tooltip-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1252,13 +1454,12 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 
 .re-rack-tooltip-swatch {
   display: inline-block;
-  width: .57rem;
-  height: .57rem;
-  margin-inline-end: .24rem;
+  flex: 0 0 auto;
+  width: 1.38rem;
+  height: .36rem;
   border: 1px solid color-mix(in srgb, var(--re-rack-text) 36%, transparent);
-  border-radius: 50%;
+  border-radius: 999px;
   background: var(--re-rack-tooltip-accent, var(--re-rack-target));
-  vertical-align: -.01rem;
 }
 
 .re-rack-tooltip[data-compact] .re-rack-tooltip-target { padding: .36rem .45rem; }

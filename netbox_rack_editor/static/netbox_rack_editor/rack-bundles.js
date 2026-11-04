@@ -106,7 +106,7 @@
       id: bundle.key, a: anchor(bundle.a, bundle.b, cards, -1), b: anchor(bundle.b, bundle.a, cards, 1),
     }));
     const paths = globalThis.NetBoxRackRouting.routeCables(connections, obstacles, bounds, protectedAreas,
-      {strategy: "pcb", spacing: 12, deviceClearance});
+      {strategy: "pcb", spacing: 12, horizontalSpacing: 17, deviceClearance});
     const fragment = document.createDocumentFragment();
     const labelObstacles = [...obstacles, ...protectedAreas];
     for (const bundle of groups) {

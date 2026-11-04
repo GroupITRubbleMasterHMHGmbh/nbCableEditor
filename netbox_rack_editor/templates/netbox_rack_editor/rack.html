@@ -17,6 +17,7 @@
   <script src="{% static 'netbox_rack_editor/rack-tooltip.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-cable-path.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-bundles.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'netbox_rack_editor/rack-virtual-combine.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-export.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-print-labels.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'netbox_rack_editor/rack-export-list.js' %}?v={{ editor_version }}" defer></script>
@@ -131,6 +132,10 @@
                   <input class="form-check-input" type="checkbox" data-view-trim aria-controls="re-rack-board">
                   <span class="form-check-label">Trim width to visible ports</span>
                 </label>
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" data-view-virtual-combine aria-controls="re-rack-board">
+                  <span class="form-check-label">Virtual combine <small class="text-secondary">(experimental)</small></span>
+                </label>
                 <div class="re-rack-port-legend" role="group" aria-label="Port status legend">
                   <span class="re-rack-legend"><span class="re-rack-dot re-rack-dot-free"></span> Free</span>
                   <span class="re-rack-legend"><span class="re-rack-dot re-rack-dot-connected"></span> Connected</span>
@@ -200,6 +205,10 @@
         </div>
         <div class="re-rack-scroll" data-scroll tabindex="0" aria-label="Scrollable rack elevations">
           <div class="re-rack-board" id="re-rack-board" data-board data-rack-face="front">
+            <div class="re-rack-unit-column" role="group" aria-label="Rack units">
+              <h2 class="re-rack-face-heading" aria-hidden="true">U</h2>
+              <div class="re-rack-units" data-unit-elevation></div>
+            </div>
             <section class="re-rack-face" id="re-rack-face-front" data-rack-face-panel="front"
                      aria-label="Front rack elevation">
               <h2 class="re-rack-face-heading">Front</h2>

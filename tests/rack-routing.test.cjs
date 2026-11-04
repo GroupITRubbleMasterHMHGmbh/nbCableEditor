@@ -214,7 +214,7 @@ function pcbFixture(interveningCard) {
   return {bounds, obstacles, protectedAreas, connections};
 }
 
-function assertPcbPaths(routes, {bounds, obstacles, protectedAreas, connections}) {
+function assertClearPaths(routes, {bounds, obstacles, protectedAreas, connections}) {
   assert.equal(routes.size, connections.length);
   for (const {id, a, b} of connections) {
     const points = routes.get(id);
@@ -240,7 +240,7 @@ test("PCB tracks separate dense arbitrary 48-port wiring and preserve the balanc
   const pcb = routeCables(connections, obstacles, bounds, protectedAreas, {strategy: "pcb"});
   assert.deepEqual(pcb, routeCables([...connections].reverse(), [...obstacles].reverse(), bounds,
     [...protectedAreas].reverse(), {strategy: "pcb"}));
-  assertPcbPaths(pcb, fixture);
+  assertClearPaths(pcb, fixture);
   assert.ok(crossingCount(pcb) < crossingCount(balanced) * .75);
   assert.ok(sharedTrackLength(pcb) < sharedTrackLength(balanced) * .25);
 });
@@ -249,7 +249,7 @@ test("PCB keeps a dense bundle off intervening equipment using both sides", () =
   const fixture = pcbFixture(true);
   const {bounds, obstacles, protectedAreas, connections} = fixture;
   const routes = routeCables(connections, obstacles, bounds, protectedAreas, {strategy: "pcb"});
-  assertPcbPaths(routes, fixture);
+  assertClearPaths(routes, fixture);
   const card = obstacles[2];
   const paths = [...routes.values()];
   assert.ok(paths.some(points => points.some(({x}) => x < card.left)));
@@ -291,10 +291,61 @@ test("PCB can leave an upper port towards the space above its card past a wide l
   ];
   const connections = [{id: 1, a, b}];
   const routes = routeCables(connections, obstacles, bounds, protectedAreas, {strategy: "pcb"});
-  assertPcbPaths(routes, {bounds, obstacles, protectedAreas, connections});
+  assertClearPaths(routes, {bounds, obstacles, protectedAreas, connections});
   const points = routes.get(1);
   assert.ok(points[1].y < a.y);
   assert.ok(points.some(({y}) => y < obstacles[0].top));
+});
+
+function firstCardExit(points, {left, right, top, bottom}) {
+  for (let i = 1; i < points.length; i++) {
+    const {x, y} = points[i];
+    const from = points[i - 1];
+    const hits = [];
+    if (x < left) hits.push(["left", (left - from.x) / (x - from.x)]);
+    if (x > right) hits.push(["right", (right - from.x) / (x - from.x)]);
+    if (y < top) hits.push(["top", (top - from.y) / (y - from.y)]);
+    if (y > bottom) hits.push(["bottom", (bottom - from.y) / (y - from.y)]);
+    if (hits.length) return hits.sort((a, b) => a[1] - b[1])[0][0];
+  }
+  return null;
+}
+
+test("stacked switches use the facing edge of each port row and spread cables around a patch panel", () => {
+  const bounds = {width: 740, height: 490};
+  const upper = {id: "A", left: 120, right: 620, top: 75, bottom: 121};
+  const lower = {id: "B", left: 120, right: 620, top: 350, bottom: 396};
+  const panel = {id: "panel", left: 110, right: 630, top: 220, bottom: 260};
+  const protectedAreas = [];
+  const [starts, ends] = [upper, lower].map(card => Array.from({length: 48}, (_, index) => {
+    const x = card.left + 18 + (index % 24) * 20;
+    const y = card.top + (index < 24 ? 13 : 33);
+    const port = card.id + index;
+    protectedAreas.push({kind: "port", port, left: x - 6, right: x + 6, top: y - 6, bottom: y + 6});
+    return {x, y, device: card.id, port};
+  }));
+  const single = [{id: 1, a: starts[11], b: ends[35]}];
+  const mixed = Array.from({length: 24}, (_, id) => {
+    const upperRow = id % 2 === 0;
+    const target = (id * 13 + 1) % 24;
+    return {id, a: starts[id + (upperRow ? 0 : 24)], b: ends[target + (upperRow ? 24 : 0)]};
+  });
+  for (const [connections, obstacles] of [[single, [upper, lower]], [mixed, [upper, lower, panel]]]) {
+    for (const strategy of ["balanced", "pcb"]) {
+      const routes = routeCables(connections, obstacles, bounds, protectedAreas, {strategy, spacing: 8, deviceClearance: 20});
+      assertClearPaths(routes, {bounds, obstacles, protectedAreas, connections});
+      for (const {id, a, b} of connections) {
+        const points = routes.get(id);
+        assert.equal(firstCardExit(points, upper), a.y < (upper.top + upper.bottom) / 2 ? "top" : "bottom");
+        assert.equal(firstCardExit([...points].reverse(), lower), b.y < (lower.top + lower.bottom) / 2 ? "top" : "bottom");
+      }
+      if (connections === mixed) {
+        const paths = [...routes.values()];
+        assert.ok(paths.some(points => points.some(({x}) => x < panel.left)), "uses the left corridor");
+        assert.ok(paths.some(points => points.some(({x}) => x > panel.right)), "uses the right corridor");
+      }
+    }
+  }
 });
 
 test("roomy cable corridors preserve device clearance and parallel pitch on both axes", () => {
@@ -304,7 +355,8 @@ test("roomy cable corridors preserve device clearance and parallel pitch on both
     {id: "B", left: 110, right: 410, top: 370, bottom: 414},
   ];
   const spacing = 9;
-  const deviceClearance = 20;
+  const horizontalSpacing = 14;
+  const deviceClearance = 25;
   const connections = Array.from({length: 4}, (_, id) => ({
     id,
     a: {x: 240 + id * 16, y: 75, device: "A"},
@@ -317,9 +369,10 @@ test("roomy cable corridors preserve device clearance and parallel pitch on both
     const bounds = transpose ? {width: 490, height: 520} : {width: 520, height: 490};
     const transformed = connections.map(({id, a, b}) => ({id, a: point(a), b: point(b)}));
     const [a, panel, b] = cards.map(area);
-    const buffer = area({id: "panel buffer", left: 90, right: 540, top: 190, bottom: 274});
+    const buffer = area({left: 85, right: 545, top: 185, bottom: 279});
     for (const strategy of ["balanced", "pcb"]) {
-      const routes = routeCables(transformed, [a, panel, b], bounds, [], {strategy, spacing, deviceClearance});
+      const routes = routeCables(transformed, [a, panel, b], bounds, [],
+        {strategy, spacing, horizontalSpacing, deviceClearance});
       const tracks = [...routes.values()].map(points => {
         assertOutsideArea(points, buffer);
         const route = points.map(point);
@@ -327,7 +380,8 @@ test("roomy cable corridors preserve device clearance and parallel pitch on both
         assert.ok(rail, "the route uses a track alongside the whole panel");
         return rail.x;
       }).sort((a, b) => a - b);
-      for (let i = 1; i < tracks.length; i++) assert.ok(tracks[i] - tracks[i - 1] >= spacing - .5);
+      const pitch = transpose ? horizontalSpacing : spacing;
+      for (let i = 1; i < tracks.length; i++) assert.ok(tracks[i] - tracks[i - 1] >= pitch - .5);
     }
   }
 });
@@ -338,7 +392,8 @@ test("a narrow corridor relaxes clearance without routing over the device", () =
   const b = {x: 150, y: 150, device: "B"};
   const card = {id: "panel", left: 10, right: 300, top: 85, bottom: 115};
   for (const strategy of ["balanced", "pcb"]) {
-    const routes = routeCables([{id: 1, a, b}], [card], bounds, [], {strategy, spacing: 9, deviceClearance: 20});
+    const routes = routeCables([{id: 1, a, b}], [card], bounds, [],
+      {strategy, spacing: 9, horizontalSpacing: 14, deviceClearance: 25});
     const points = routes.get(1);
     assertOutsideArea(points, card);
     assert.deepEqual(points[0], {x: a.x, y: a.y});

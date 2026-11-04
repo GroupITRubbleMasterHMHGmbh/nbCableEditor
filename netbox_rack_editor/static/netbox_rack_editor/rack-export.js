@@ -102,7 +102,8 @@
     drawing.querySelector("[data-wire-highlight]")?.parentElement.remove();
     drawing.querySelectorAll([
       "[data-rack-gap]", "[data-cable-focus-device]", ".re-rack-wire-hit", ".re-rack-wire-handle",
-      ".re-rack-wire-handle-visible", ".re-rack-wire-preview", ".re-rack-wire-staged-connect", ".re-rack-bundle-hit",
+      ".re-rack-wire-handle-visible", "[data-wire-previews]", ".re-rack-bundle-hit",
+      "[data-wire-sleeve-overlay]",
     ].join(",")).forEach(element => element.remove());
     drawing.querySelectorAll(".re-rack-wire-staged-unplug").forEach(element =>
       element.classList.remove("re-rack-wire-staged-unplug"));

@@ -1,6 +1,7 @@
 import json
 import re
 from collections import defaultdict
+from urllib.parse import urlencode
 
 from core.models import ObjectType
 from dcim.constants import NONCONNECTABLE_IFACE_TYPES
@@ -565,6 +566,8 @@ def _rack_editor_context(request, pk):
         editable_ports[model] = set(model.objects.restrict(user, "change").filter(device_id__in=device_map).values_list("pk", flat=True))
     cables, vlans = _rack_connection_data(user, rack.pk, device_map, ports, tag_catalogs[Cable])
     visible_cable_ids = {cable["id"] for cable in cables}
+    can_add = user.has_perm("dcim.add_cable")
+    native_cable_add = reverse("dcim:cable_add") if can_add else None
     by_device = defaultdict(list)
     for key, port in ports.items():
         device = device_map[port.device_id]
@@ -576,6 +579,16 @@ def _rack_editor_context(request, pk):
             else by_module_template.get((port.module_id, kind, port.name))
         )
         cable_visible = port.cable_id in visible_cable_ids
+        occupancy = _occupancy(port)
+        blocked = port_unavailable(port) or (port.cable_id is not None and not cable_visible)
+        manual_connect_url = None
+        if native_cable_add and occupancy == "free" and not blocked:
+            params = urlencode({
+                "a_terminations_type": port._meta.label_lower,
+                "a_terminations": port.pk,
+                "b_terminations_type": Interface._meta.label_lower,
+            })
+            manual_connect_url = f"{native_cable_add}?{params}"
         by_device[device.pk].append({
             "id": key,
             **port_metadata(port),
@@ -594,8 +607,9 @@ def _rack_editor_context(request, pk):
             }),
             **(placement or {"face": LAYOUT_PORTS[kind][2], "x": None, "y": None}),
             "cableId": port.cable_id if cable_visible else None,
-            "occupancy": _occupancy(port),
-            "blocked": port_unavailable(port) or (port.cable_id is not None and not cable_visible),
+            "occupancy": occupancy,
+            "blocked": blocked,
+            "manualConnectUrl": manual_connect_url,
         })
 
     return {
@@ -641,7 +655,7 @@ def _rack_editor_context(request, pk):
             "cableLengthUnits": [
                 {"value": value, "label": str(label)} for value, label in Cable._meta.get_field("length_unit").flatchoices
             ],
-            "canAdd": user.has_perm("dcim.add_cable"),
+            "canAdd": can_add,
             "canChange": user.has_perm("dcim.change_cable"),
             "canDelete": user.has_perm("dcim.delete_cable"),
             "history": history_for_rack(user, rack.pk),
