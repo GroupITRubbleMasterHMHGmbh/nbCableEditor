@@ -510,9 +510,12 @@ def _mutate(db, user, rack_id, data):
     journal = lock_history(db, user, rack_id)
     action = data.get("action")
     if action == "history":
+        from .plan_apply import replay_rack_plan
+
         jump_history(
             db, journal, data.get("target"), data.get("revision"),
             lambda expected, desired: _apply_cable_change(db, user, rack_id, expected, desired),
+            apply_plan=lambda changes: replay_rack_plan(db, user, rack_id, changes),
         )
         return {"history": history_payload(journal)}, 200
 

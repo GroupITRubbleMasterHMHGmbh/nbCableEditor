@@ -1,0 +1,82 @@
+<section class="mt-4" id="cable-calculator" aria-labelledby="nre-calculator-title">
+  <h2 id="nre-calculator-title">Cable Calculator</h2>
+  <p class="text-secondary">Set the physical routing assumptions for rack cable lengths and the standard sizes available for purchasing.</p>
+  <div class="card mb-3">
+    <div class="card-header d-flex flex-wrap gap-2 justify-content-between">
+      <h3 class="card-title">Routing profiles</h3>
+      <a class="btn btn-sm btn-outline-primary" href="?new_calculator_profile=1#cable-calculator">New profile</a>
+    </div>
+    <div class="card-body">
+      <nav class="d-flex flex-wrap gap-2 mb-3" aria-label="Routing profiles">
+        {% for name in calculator_profiles %}
+          <a href="?calculator_profile={{ name|urlencode:'' }}#cable-calculator"
+             class="btn btn-sm {% if name == selected_profile %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+             {% if name == selected_profile %}aria-current="true"{% endif %}>
+            {{ name }}{% if name == default_profile %} <span class="badge text-bg-secondary">Default</span>{% endif %}
+          </a>
+        {% endfor %}
+      </nav>
+      <form method="post" action="#cable-calculator">
+        {% csrf_token %}
+        <input type="hidden" name="profile_key" value="{{ selected_profile|default_if_none:'' }}">
+        {{ profile_form.non_field_errors }}
+        <div class="row g-3">
+          <div class="col-sm-6 col-xl-3">{{ profile_form.name.label_tag }}{{ profile_form.name }}{{ profile_form.name.errors }}</div>
+          {% for field in profile_form.route_fields %}
+            <div class="col-sm-6 col-xl-3">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>
+          {% endfor %}
+          <div class="col-sm-6 col-xl-3">
+            {{ profile_form.default_radius.label_tag }}{{ profile_form.default_radius }}{{ profile_form.default_radius.errors }}
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-3 mt-3">
+          {% for field in profile_form.checkboxes %}
+            <div class="form-check">{{ field }} <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field.errors }}</div>
+          {% endfor %}
+        </div>
+        <details class="mt-3" {% if profile_form.errors %}open{% endif %}>
+          <summary>Bend-radius overrides by cable type</summary>
+          <p class="text-secondary my-2">Leave a cable type blank to use the profile radius. Use values from the cable manufacturer when available.</p>
+          <div class="row g-3">
+            {% for field in profile_form.type_radii %}
+              <div class="col-sm-6 col-xl-3">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>
+            {% endfor %}
+          </div>
+        </details>
+        <p class="form-text">New plans take a copy of the selected profile. Existing plans retain their own settings.</p>
+        <div class="d-flex flex-wrap gap-2 justify-content-end">
+          {% if selected_profile and calculator_profiles|length > 1 %}
+            <button class="btn btn-outline-danger" type="submit" name="calculatorAction" value="delete-profile" formnovalidate>Delete profile</button>
+          {% endif %}
+          <button class="btn btn-primary" type="submit" name="calculatorAction" value="save-profile">{% if selected_profile %}Save profile{% else %}Create profile{% endif %}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Standard cable lengths</h3></div>
+    <div class="card-body">
+      <p class="text-secondary">List purchasable lengths in meters separated by commas, such as 0.25, 0.5, 1, 2. A blank type is left out of the catalog.</p>
+      <form method="post" action="#cable-calculator">
+        {% csrf_token %}
+        {{ catalog_form.non_field_errors }}
+        <div class="row g-3">
+          {% for field in catalog_form.cat_lengths %}
+            <div class="col-sm-6 col-xl-4">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>
+          {% endfor %}
+        </div>
+        <details class="my-3" {% if catalog_form.errors %}open{% endif %}>
+          <summary>Other NetBox cable types</summary>
+          <div class="row g-3 mt-1">
+            {% for field in catalog_form.other_lengths %}
+              <div class="col-sm-6 col-xl-4">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>
+            {% endfor %}
+          </div>
+        </details>
+        <div class="d-flex justify-content-end">
+          <button class="btn btn-primary" type="submit" name="calculatorAction" value="save-catalog">Save cable lengths</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>

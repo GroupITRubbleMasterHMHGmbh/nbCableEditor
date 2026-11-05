@@ -24,6 +24,7 @@
   <script src="{% static 'nbcableeditor/rack-export-list.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-export-print.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-vlan-colors.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-plan.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack.js' %}?v={{ editor_version }}" defer></script>
 {% endblock %}
 
@@ -177,6 +178,26 @@
               <span class="re-rack-vlan-key" data-vlan-key="both">Both</span>
             </div>
           </div>
+          {% if rack_data.planning %}
+            <div class="re-rack-plan-controls" role="group" aria-label="Rack planning">
+              <label class="visually-hidden" for="re-rack-plan-select">Wiring plan</label>
+              <select class="form-select form-select-sm no-ts" id="re-rack-plan-select" data-plan-select>
+                <option value="">Select plan</option>
+              </select>
+              <label class="visually-hidden" for="re-rack-plan-view">Wiring view</label>
+              <select class="form-select form-select-sm no-ts" id="re-rack-plan-view" data-plan-view>
+                <option value="stock">Inventory</option>
+                <option value="mixed" disabled>Inventory + plan</option>
+                <option value="plan" disabled>Plan only</option>
+              </select>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-plan-manage aria-haspopup="dialog">
+                <i class="mdi mdi-clipboard-edit-outline" aria-hidden="true"></i> Plans
+              </button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-plan-report aria-haspopup="dialog">
+                <i class="mdi mdi-ruler" aria-hidden="true"></i> Cable calculator
+              </button>
+            </div>
+          {% endif %}
           <div class="re-rack-toolbar-actions">
             <div class="re-rack-zoom-control">
               <label for="re-rack-zoom" class="small">Zoom</label>
@@ -207,8 +228,31 @@
           </div>
         </div>
         <p class="re-rack-quick-status text-muted small mb-0" role="status" data-quick-status hidden></p>
+        {% if rack_data.planning %}
+          <p class="re-rack-plan-message small mb-0" role="status" data-plan-message hidden></p>
+        {% endif %}
       </nav>
       <section class="card re-rack-panel" aria-label="Rack elevations">
+        {% if rack_data.planning %}
+          <div class="re-rack-plan-bar" data-plan-bar hidden>
+            <div class="re-rack-plan-caption">
+              <span class="badge bg-primary-lt" data-plan-indicator>Draft</span>
+              <span class="fw-semibold" data-plan-name></span>
+              <span class="re-rack-plan-key">Planned cable</span>
+              <span class="re-rack-plan-key re-rack-plan-key-released">Free after apply</span>
+            </div>
+            <label class="re-rack-plan-opacity small" data-plan-opacity-control hidden>
+              Inventory opacity
+              <input type="range" min="0" max="100" step="5" value="30" data-plan-opacity>
+              <output data-plan-opacity-value>30%</output>
+            </label>
+            <div class="re-rack-plan-actions">
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-plan-port-actions disabled>Port actions</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-plan-changes aria-haspopup="dialog">Changes</button>
+              <button type="button" class="btn btn-outline-primary btn-sm" data-plan-apply aria-haspopup="dialog">Review &amp; apply</button>
+            </div>
+          </div>
+        {% endif %}
         <div class="re-rack-bundle-panel" data-bundle-panel hidden>
           <div class="re-rack-bundle-panel-heading">
             <p class="re-rack-bundle-panel-label">Cable bundles</p>
@@ -254,6 +298,17 @@
           <details open class="re-rack-inspector-section" id="re-rack-connections-section" data-connections-section>
             <summary>Connections <span class="badge bg-secondary-lt" data-cable-count></span></summary>
             <div class="re-rack-inspector-inner">
+              <div class="d-flex gap-1 mb-2">
+                <label class="visually-hidden" for="re-rack-connection-search">Search connections and cable traces</label>
+                <input class="form-control form-control-sm" id="re-rack-connection-search" type="search"
+                       placeholder="Search cables, ports or traces" autocomplete="off"
+                       aria-controls="re-rack-connection-list" data-connection-search>
+                <button class="btn btn-outline-secondary btn-sm" type="button" aria-label="Clear connection search"
+                        title="Clear connection search" data-connection-search-clear hidden>
+                  <i class="mdi mdi-close" aria-hidden="true"></i>
+                </button>
+              </div>
+              <span class="visually-hidden" role="status" data-connection-search-status></span>
               <details class="re-rack-sidebar-fields">
                 <summary>Fields</summary>
                 <div class="re-rack-field-choices" role="group" aria-label="Connection fields">
@@ -284,7 +339,7 @@
                 </div>
               </details>
               <div data-cable-detail hidden></div>
-              <div class="re-rack-cable-list" data-cable-list></div>
+              <div class="re-rack-cable-list" id="re-rack-connection-list" data-cable-list></div>
             </div>
           </details>
           <details open class="re-rack-inspector-section" id="re-rack-directory-section" data-directory-section>
@@ -667,6 +722,18 @@
         </div>
       </form>
     </template>
+    {% if rack_data.planning %}
+      <dialog class="re-rack-dialog re-rack-plan-dialog" data-plan-dialog aria-labelledby="re-rack-plan-dialog-title">
+        <div class="re-rack-dialog-body">
+          <div class="re-rack-plan-dialog-heading">
+            <h2 class="re-rack-dialog-title" id="re-rack-plan-dialog-title" data-plan-dialog-title></h2>
+            <button type="button" class="btn-close" data-plan-dialog-close aria-label="Close"></button>
+          </div>
+          <p class="re-rack-dialog-error" data-plan-error role="alert" hidden></p>
+          <div data-plan-dialog-content></div>
+        </div>
+      </dialog>
+    {% endif %}
     <dialog class="re-rack-dialog re-rack-history-dialog" data-history-dialog aria-labelledby="re-rack-history-title">
       <div class="re-rack-dialog-body">
         <h2 class="re-rack-dialog-title" id="re-rack-history-title">Cable history</h2>

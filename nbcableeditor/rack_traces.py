@@ -94,7 +94,8 @@ def readable_nodes(user, types, refs, rack_ports, known_cables):
     cable_nodes.update({
         cable.pk: cable
         for cable in Cable.objects.restrict(user)
-        .filter(pk__in=ids[cable_type] - cable_nodes.keys()).only("color")
+        .filter(pk__in=ids[cable_type] - cable_nodes.keys())
+        .only("color", "label", "type", "length", "length_unit")
     })
     return port_nodes, cable_nodes
 
@@ -152,14 +153,25 @@ def trace_payload(path, cable_id, cable_type, endpoints, cables):
 
     hops = [endpoints[key] for key in visible if key[0] != cable_type]
     segments = []
+
+    def report_endpoint(key):
+        return {field: endpoints[key][field] for field in ("deviceName", "portName", "deviceUrl", "portUrl")}
+
     for index in range(0, len(visible) - 2, 3):
         near, link, far = visible[index:index + 3]
         if link[1] != cable_id:
+            cable = cables[link[1]]
             segments.append({
                 "id": link[1],
                 "a": endpoints[near].get("portId"),
                 "b": endpoints[far].get("portId"),
-                "color": cables[link[1]].color,
+                "color": cable.color,
+                "label": cable.label,
+                "endpointA": report_endpoint(near),
+                "endpointB": report_endpoint(far),
+                "typeValue": cable.type or "",
+                "lengthValue": str(cable.length) if cable.length is not None else None,
+                "lengthUnit": cable.length_unit or "",
             })
     result = {"status": status, "hops": hops, "segments": segments}
     if status in {"complete", "open"}:

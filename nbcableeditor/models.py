@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.db.models.functions import Lower
+from utilities.querysets import RestrictedQuerySet
 
 
 class CableEditorSettings(models.Model):
@@ -96,3 +98,35 @@ class CableHistoryEntry(models.Model):
             models.UniqueConstraint(fields=("journal", "sequence"), name="nbcableeditor_history_sequence"),
             models.CheckConstraint(condition=Q(sequence__gte=1), name="nbcableeditor_history_positive_sequence"),
         ]
+
+
+class RackCablePlan(models.Model):
+    rack = models.ForeignKey("dcim.Rack", on_delete=models.CASCADE, related_name="+")
+    name = models.CharField(max_length=120)
+    revision = models.PositiveBigIntegerField(default=0)
+    operations = models.JSONField(default=list, blank=True)
+    profile = models.JSONField(default=dict)
+    catalog = models.JSONField(default=dict)
+    result = models.JSONField(default=dict, blank=True)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+    applied_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+
+    objects = RestrictedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ("name", "pk")
+        constraints = [
+            models.UniqueConstraint(Lower("name"), "rack", name="nbcableeditor_plan_rack_name"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class RackCableGeometry(models.Model):
+    rack = models.OneToOneField("dcim.Rack", on_delete=models.CASCADE, related_name="+")
+    measurements = models.JSONField(default=dict, blank=True)

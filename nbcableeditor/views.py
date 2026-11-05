@@ -28,6 +28,7 @@ from .layout_catalog import templates_for
 from .layout_placeholders import layout_placeholder_fields
 from .metadata_tags import available_tags, tag_data
 from .models import LayoutRevision, PortPlacement
+from .plan_views import plan_bootstrap
 from .rack_layouts import rack_layouts
 from .rack_traces import PORT_KINDS, endpoint_data, native_path, port_metadata, readable_nodes, trace_payload
 
@@ -504,6 +505,7 @@ def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fie
         simple_in_rack = bool(end_a and end_b and simple)
         cables.append({
             "id": cable.pk,
+            "simple": simple,
             "a": port_key(type(end_a), end_a.pk) if end_a else None,
             "b": port_key(type(end_b), end_b.pk) if end_b else None,
             "endpointA": _immediate_endpoint(peer_a, cable.pk, rack_id, nodes, endpoints),
@@ -539,7 +541,9 @@ def _occupancy(port):
 
 @require_GET
 def rack_editor(request, pk):
-    return render(request, "nbcableeditor/rack.html", _nbcableeditor_context(request, pk))
+    context = _nbcableeditor_context(request, pk)
+    context["rack_data"]["planning"] = plan_bootstrap(request, context["rack"])
+    return render(request, "nbcableeditor/rack.html", context)
 
 
 @override("en")

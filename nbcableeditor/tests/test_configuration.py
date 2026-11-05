@@ -7,6 +7,7 @@ from extras.models import CustomField
 from users.models import ObjectPermission
 from utilities.testing import TestCase
 
+from nbcableeditor.calculator import DEFAULT_PROFILE_NAME, configured_calculator
 from nbcableeditor.configuration import (
     SETTINGS_PERMISSION, SETTINGS_ROUTE, CableEditorSettingsForm, cable_custom_values, nbcableeditor_options,
 )
@@ -74,6 +75,33 @@ class CableEditorSettingsTest(TestCase):
         CableEditorSettings.objects.filter(pk=1).update(options={"zoom": "fit"})
         self.assertEqual(nbcableeditor_options()[0]["zoom"], "horizontal-fit")
         self.assertEqual(CableEditorSettings.objects.get().options["zoom"], "fit")
+
+    def test_create_named_calculator_profile_and_save_catalog_independently(self):
+        self.add_permissions(SETTINGS_PERMISSION)
+        url = reverse(SETTINGS_ROUTE)
+        response = self.client.get(url, {"new_calculator_profile": 1})
+        self.assertContains(response, "Cable Calculator")
+        form = response.context["profile_form"]
+        values = {form.add_prefix(key): value for key, value in form.initial.items() if value is not None}
+        values.update({
+            "calculatorAction": "save-profile", "profile-name": "Fiber and copper", "profile-reserve_percent": 22.5,
+            "profile-radius-mmf-om4": 40, "profile-set_default": "on",
+        })
+        self.assertEqual(self.client.post(url, values).status_code, 302)
+        self.assertEqual(configured_calculator()["defaultProfile"], "Fiber and copper")
+        profiles = configured_calculator()["profiles"]
+        self.assertEqual(profiles["Fiber and copper"]["reserve_percent"], 22.5)
+        self.assertEqual(profiles["Fiber and copper"]["bend_radius_mm"]["mmf-om4"], 40)
+        self.assertIn(DEFAULT_PROFILE_NAME, profiles)
+
+        self.assertEqual(self.client.post(url, {"calculatorAction": "save-catalog", "catalog-cat6": "1.5, 0.25, 1.50"})
+                         .status_code, 302)
+        self.assertEqual(configured_calculator()["catalog"], {"cat6": [250, 1500]})
+        response = self.client.post(url, {"calculatorAction": "save-catalog", "catalog-cat6": "0, invalid"})
+        self.assertIn("cat6", response.context["catalog_form"].errors)
+        self.assertEqual(configured_calculator()["catalog"], {"cat6": [250, 1500]})
+        self.assertRedirects(self.client.post(url, self.default_form_data()), url)
+        self.assertEqual(configured_calculator()["profiles"], profiles)
 
     def test_only_selected_visible_cable_custom_fields_are_serialized(self):
         object_type = ObjectType.objects.get_for_model(Cable)

@@ -10,11 +10,14 @@
         <h1 class="mb-1">Plugin settings</h1>
         <p class="text-secondary mb-0">Set the starting view, drawing dimensions, and visible details for this NetBox instance.</p>
       </div>
-      {% if perms.dcim.view_devicetype and perms.dcim.change_devicetype %}
-        <a class="btn btn-outline-primary" href="{% url 'plugins:nbcableeditor:layout-imports' %}">
-          <i class="mdi mdi-file-import-outline" aria-hidden="true"></i> Layout template import
-        </a>
-      {% endif %}
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-primary" href="#cable-calculator">Cable Calculator</a>
+        {% if perms.dcim.view_devicetype and perms.dcim.change_devicetype %}
+          <a class="btn btn-outline-primary" href="{% url 'plugins:nbcableeditor:layout-imports' %}">
+            <i class="mdi mdi-file-import-outline" aria-hidden="true"></i> Layout template import
+          </a>
+        {% endif %}
+      </div>
     </header>
     <form method="post">
       {% csrf_token %}
@@ -66,8 +69,9 @@
         </section>
       {% endfor %}
       <div class="d-flex justify-content-end">
-        <button class="btn btn-primary" type="submit">Save settings</button>
+        <button class="btn btn-primary" type="submit">Save editor settings</button>
       </div>
     </form>
+    {% include 'nbcableeditor/calculator_settings.html' %}
   </div>
 {% endblock %}

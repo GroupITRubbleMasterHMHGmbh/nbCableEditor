@@ -6,6 +6,7 @@ from dcim.models import (
 from django.urls import reverse
 from utilities.testing import TestCase
 
+from nbcableeditor.calculator import RackCalculator, UNIT_MM, normalize_profile
 from nbcableeditor.models import LayoutRevision, PortPlacement
 
 
@@ -55,10 +56,15 @@ class RackModuleLayoutTestCase(TestCase):
         PortPlacement.objects.create(interface_template=port_template, face="front", x=.75, y=.5, label="Uplink")
 
         url = reverse("plugins:nbcableeditor:rack", args=[rack.pk])
-        payload = self.client.get(url).context["rack_data"]["devices"][0]
+        rack_data = self.client.get(url).context["rack_data"]
+        payload = rack_data["devices"][0]
         port, = payload["ports"]
         self.assertEqual((port["name"], port["face"], port["x"], port["y"], port["layoutLabel"]),
                          ("Ethernet3/2/1", "front", .5625, .5, "Uplink"))
+        _, point, warning = RackCalculator(rack, rack_data, normalize_profile({}), {}).endpoint(port["id"], None)
+        self.assertIsNone(warning)
+        self.assertAlmostEqual(point.x[0], .5625 * 19 * 25.4)
+        self.assertAlmostEqual(point.y[0], (rack.u_height - .5) * UNIT_MM)
         drawing = payload["design"]["front"]
         self.assertFalse(drawing["useImage"])
         card_drawing = drawing["items"][0]["module"]

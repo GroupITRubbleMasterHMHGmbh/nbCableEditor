@@ -3,9 +3,12 @@ const test = require("node:test");
 
 require("../nbcableeditor/static/nbcableeditor/rack-virtual-combine.js");
 require("../nbcableeditor/static/nbcableeditor/rack-cable-path.js");
+require("../nbcableeditor/static/nbcableeditor/rack-corridors.js");
+require("../nbcableeditor/static/nbcableeditor/rack-routing.js");
 
 const {findRuns, planTubes} = globalThis.NbCableEditorVirtualCombine;
 const {roundPath} = globalThis.NbCableEditorCablePath;
+const {routeCables} = globalThis.NbCableEditorRouting;
 const cable = (id, a, b) => ({id, a: {port: a}, b: {port: b}});
 
 test("combines only consecutive ports from the same two rows in matching order", () => {
@@ -42,23 +45,25 @@ test("excludes loopbacks on the same physical device, even across two faces", ()
 });
 
 function fixture({count = 8, panel = false, extraGap = 0} = {}) {
+  const wide = count > 12;
+  const right = wide ? 560 : 292;
   const rows = [
     {id: "a:1", deviceId: 1, ports: []},
     {id: "b:1", deviceId: 2, ports: []},
   ];
   const obstacles = [
-    {id: "a", left: 54, right: 292, top: 70, bottom: 110},
-    {id: "b", left: 54, right: 292, top: 215 + extraGap, bottom: 255 + extraGap},
+    {id: "a", left: 54, right, top: 70, bottom: 110},
+    {id: "b", left: 54, right, top: 215 + extraGap, bottom: 255 + extraGap},
   ];
-  if (panel) obstacles.push({id: "p", left: 54, right: 292, top: 146, bottom: 175});
-  const bounds = {width: 346, height: 300 + extraGap};
+  if (panel) obstacles.push({id: "p", left: 54, right, top: 146, bottom: 175});
+  const bounds = {width: right + 54, height: 300 + extraGap};
   const connections = [];
   const routes = new Map();
   const protectedAreas = [];
   for (let i = 0; i < count; i++) {
-    const x = 112 + i * 16;
+    const x = 112 + i * (wide ? 415 / (count - 1) : 16);
     const upper = {port: i + 1, device: "a", x, y: panel ? 80 : 100};
-    const lower = {port: i + 21, device: "b", x: x + 2, y: 225 + extraGap};
+    const lower = {port: i + (wide ? 101 : 21), device: "b", x: x + 2, y: 225 + extraGap};
     rows[0].ports.push(upper.port);
     rows[1].ports.push(lower.port);
     for (const {port, x, y} of [upper, lower]) {
@@ -67,7 +72,7 @@ function fixture({count = 8, panel = false, extraGap = 0} = {}) {
     if (panel) protectedAreas.push({port: 50 + i, left: x - 5, right: x + 5, top: 96, bottom: 104});
     const [a, b] = i % 2 ? [lower, upper] : [upper, lower];
     connections.push({id: i, a, b});
-    const ordinaryX = i % 2 ? 20 : 320;
+    const ordinaryX = i % 2 ? 20 : bounds.width - 26;
     routes.set(i, [a, {x: ordinaryX, y: a.y}, {x: ordinaryX, y: b.y}, b]);
   }
   return {connections, rows, routes, options: {obstacles, protectedAreas, bounds}};
@@ -165,6 +170,54 @@ test("keeps longer eligible runs within the same narrow tube width", () => {
   const plan = planTubes(connections, rows, routes, options);
   const tube = assertCompactTube(plan, connections);
   assert.equal(tube.width, 13);
+});
+
+test("keeps 12, 24 and 48 ordered cables in one slim sleeve even in a 64px facing gap", () => {
+  for (const count of [12, 24, 48]) {
+    const {connections, rows, routes, options} = fixture({count, extraGap: -41});
+    for (const area of options.protectedAreas) {
+      area.left += 1;
+      area.right -= 1;
+    }
+    const plan = planTubes(connections, rows, routes, {...options, deviceClearance: 27.5});
+    const tube = assertCompactTube(plan, connections);
+    assert.equal(tube.width, 13);
+    assert.ok(tube.top >= options.obstacles[0].bottom && tube.bottom <= options.obstacles[1].top);
+    assert.deepEqual(crossings(plan.paths), [], "the facing taper keeps the order of all cables");
+  }
+});
+
+test("uses the available gap for a longer sleeve in a 48-cable row", () => {
+  const {connections, rows, routes, options} = fixture({count: 48, extraGap: 50});
+  const tube = assertCompactTube(planTubes(connections, rows, routes, {...options, deviceClearance: 27.5}), connections);
+  assert.ok(tube.bottom - tube.top >= 60);
+});
+
+test("keeps both 24-port rows bundled with ordinary routes from the other row present", () => {
+  const {connections, rows, options} = fixture({count: 48, extraGap: -40});
+  const [upper, lower] = options.obstacles;
+  const areas = new Map(options.protectedAreas.map(area => [area.port, area]));
+  for (const {id, a, b} of connections) {
+    const row = Math.floor(id / 24);
+    for (const port of [a, b]) {
+      const card = port.device === upper.id ? upper : lower;
+      port.x = 112 + (id % 24) * 16;
+      port.y = card.top + 10 + row * 20;
+      Object.assign(areas.get(port.port), {
+        left: port.x - 3.5, right: port.x + 3.5, top: port.y - 5, bottom: port.y + 5,
+      });
+    }
+  }
+  const banks = rows.flatMap(row => [0, 24].map(offset => ({
+    ...row, id: row.id + ":" + offset, ports: row.ports.slice(offset, offset + 24),
+  })));
+  const routeOptions = {...options, deviceClearance: 27.5, spacing: 9, horizontalSpacing: 14, foreignStrokeWidth: 8};
+  const routes = routeCables(connections, options.obstacles, options.bounds, options.protectedAreas, routeOptions);
+  const plan = planTubes(connections, banks, routes, routeOptions);
+  assert.equal(plan.paths.size, 48);
+  assert.deepEqual(plan.tubes.map(tube => tube.ids), [0, 24].map(offset =>
+    connections.slice(offset, offset + 24).map(cable => cable.id)));
+  assert.ok(plan.tubes.every(tube => tube.width === 13));
 });
 
 test("combines upper rows around the outside of an intervening device", () => {

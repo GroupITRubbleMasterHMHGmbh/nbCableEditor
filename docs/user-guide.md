@@ -67,7 +67,7 @@ Use **View → Use global defaults** to clear your saved view and list columns. 
 
 - Choose **Lines → Bundles** to see cable counts grouped by device pair and rack side. Select a bundle in the drawing or in the **Cable bundles** panel to expand it. Select **Show all bundles** to return to the overview.
 - Use the small **+** and **−** controls between devices to adjust the display gap and make room for cable lanes. The rack positions in NetBox stay the same.
-- Enable **Virtual combine** to try sleeves along eligible vertical or horizontal runs. The router searches for a clear stretch with space around other cables. Hover a sleeve to reveal all member cables inside its outline. Hover an individual cable or connected port to follow that link.
+- Enable **Virtual combine** to group eligible vertical or horizontal runs into slim sleeves. Long runs use compact branches and can get additional room around the elevations. Each uninterrupted row is evaluated separately, so a two-row switch can show one sleeve per row. Hover a sleeve to reveal all member cables inside its outline. Hover an individual cable or connected port to follow that link.
 
 ![Front and rear elevations in Both view, with device-pair bundles and cable counts](screenshots/user-guide-bundles.png)
 
@@ -112,6 +112,7 @@ Hover a connected port to read **From → Destination**, with the hovered port f
 ![Cable tooltip showing the nearer port, arrow, and destination port](screenshots/user-guide-cable-hover.png)
 
 - Click or hover a **Connections** entry to highlight its cable in the drawing. The list shows endpoints and color. Use **Fields** to add details such as VLANs, type, status, and length.
+- Search **Connections** by cable label, exact ID such as `#5`, device, port, or any readable stop along the trace. Combine terms such as `Switch A WD-01` to narrow the list. A **Trace match** shows where a result was found along the route. The search combines with the current device and VLAN filters and affects the list only. Press **Esc** in the field to clear it.
 - Use **Interface directory** for ports on or outside the elevations. It shows the connected peer and cable color when available. Use **Fields** to add peer VLANs, label, type, or description.
 - Double-click a port or use **Port details** from its context menu to see port metadata and links to the native NetBox port, device, and connection. With change permission, you can edit the label and tags.
 - Click a cable to open its details. A trace can follow NetBox front-to-rear mappings through a patch panel and a wall outlet. A stop marked **Unpatched** indicates an open end. With change permission, edit cable color, length, label, description, tags, and comments in the dialog. Text fields save on blur or **Enter**, comments save with **Ctrl+Enter**, and color and tag changes save when selected.
@@ -131,6 +132,30 @@ Hover a connected port to read **From → Destination**, with the hovered port f
 | Restore earlier changes | Use **Undo**, **Redo**, or choose a checkpoint in **History**. History covers cable changes saved through Cable Editor and is scoped to your account and rack. A concurrent change to the same cable can prevent a restore. |
 
 The editor draws and directly edits one-to-one cables between interfaces, front ports, and rear ports in the same rack. NetBox permissions govern which actions are available.
+
+## Plan rack wiring
+
+1. Open **Plans** in the rack toolbar and create a named draft. Choose a calculator profile. Its settings and the current standard length catalog are copied into the draft.
+2. Choose **Inventory + plan** to see the draft over the existing cables. Use the opacity slider to dim inventory lines. **Plan only** displays new and moved connections at their proposed ports. **Inventory** returns to live cable editing.
+3. In a plan view, drag from a free port to a destination to stage a cable. Drag from a connected port to stage a move. You can also select the source and destination in turn. For an unplug, select a port, open **Port actions**, and choose **Plan unplug**. The editor marks ports that become free only in the plan.
+4. Open **Changes** to check the old and new endpoints, edit a new cable, or remove a proposed change. You can stage a move to a currently occupied port and resolve it with another move or unplug before applying.
+5. Open **Review & apply** to see all changes, unresolved conflicts, and length warnings. Choose **Planned**, or **Connected** if the work has already been performed. Confirm a standard or manual length on each new cable you want to record. Applying the draft creates one entry in **History** for undo and redo. Moved cables keep their NetBox IDs and existing metadata.
+
+Plans belong to the rack and are shared with users who have access. Drafts can be renamed, duplicated, and deleted. Use **New draft from profile** on an applied plan to reuse its calculator settings and catalog. Deleting an applied plan removes its planning record. Use **History** to revert the cabling itself.
+
+Grant users the relevant **Rack Cable Plan** object permissions in NetBox alongside their rack, device, port, and cable permissions. Updating rack measurements requires permission to change the rack. Plans support simple cables between interfaces, front ports, and rear ports on devices in the same rack.
+
+### Size cables and prepare a shopping list
+
+Open **Cable calculator** in the rack toolbar. Select **Inventory** or the active plan and choose **Detailed lengths** or **Bill of materials**. The detail view shows the endpoints, route, physical distance, connector allowance, bends, reserve, minimum length, and recommended standard size. Inventory also shows the recorded NetBox length and flags cables that are too short, potentially replaceable with shorter ones, or need review.
+
+The plan's bill of materials counts new cables. Review the length of a cable you intend to move. To plan a replacement, stage an unplug for the existing cable and add a new one. **Download CSV** exports the same results as the selected view. Reports use readable physical cable segments, including individual segments through a patch panel. Filters, zoom, trim, and displayed routing leave the report unchanged.
+
+Use **Plans → Rack measurements** to enter measured panel width, front-to-rear rail depth, or channel offsets. Missing port placements produce a conservative estimate with a review note. A front-to-rear cable needs the rail depth, and an unmounted endpoint needs a manual measurement.
+
+Use **Cable Editor → Settings → Cable Calculator** to manage routing profiles and standard cable lengths by NetBox type. The default CAT profile allows 15% reserve, 40 mm of connector lead per end, a 30 mm bend radius, and a 50 mm offset on each side. It prefers a direct connection on the same rack face when eligible. Under **Plans**, adjust an individual draft's copied routing profile for a specific installation.
+
+The calculator uses 44.45 mm per rack unit, the rack's mounting width, and the placed device and module ports. It mirrors rear port coordinates before comparing sides. **Prefer side channel** can accept a longer route within the profile's extra-distance limit, while **Always use a side channel** requires channel routing. For a half-depth device port on the opposite side of its mounting face, measure the actual cable path. [NetBox rack dimensions](https://netbox.readthedocs.io/en/stable/models/dcim/rack/) · [Rack unit dimensions](https://iportal2.schneider-electric.com/Contents/docs/UPS-MLAN-6ZNQET_R1_EN.pdf)
 
 ## Export the rack plan
 

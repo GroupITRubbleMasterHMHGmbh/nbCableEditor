@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_http_methods
@@ -9,6 +10,7 @@ from dcim.models import Cable
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
 from extras.models import CustomField
 
+from .calculator_settings import calculator_settings_context, update_calculator_settings
 from .models import CableEditorSettings
 
 
@@ -169,6 +171,7 @@ def _cable_fields():
 
 def nbcableeditor_options():
     options = _configured_options()
+    options.pop("calculator", None)
     names = options["cableCustomFields"]
     fields = {field.name: field for field in _cable_fields().filter(name__in=names)} if names else {}
     fields = [fields[name] for name in names if name in fields]
@@ -215,15 +218,27 @@ def cable_custom_values(user, cables, fields):
 def editor_settings(request):
     if not can_manage_editor_settings(request.user):
         raise PermissionDenied
+    calculator_post = request.method == "POST" and "calculatorAction" in request.POST
+    calculator_context = {}
+    if calculator_post:
+        calculator_context, response = update_calculator_settings(request, SETTINGS_ROUTE)
+        if response is not None:
+            return response
     custom_fields = list(_cable_fields())
+    options = _configured_options()
     form = CableEditorSettingsForm(
-        request.POST if request.method == "POST" else None, initial=_configured_options(), custom_fields=custom_fields,
+        request.POST if request.method == "POST" and not calculator_post else None,
+        initial=options, custom_fields=custom_fields,
     )
-    if request.method == "POST" and form.is_valid():
-        CableEditorSettings.objects.update_or_create(pk=1, defaults={"options": form.options()})
+    if form.is_bound and form.is_valid():
+        with transaction.atomic():
+            settings, _ = CableEditorSettings.objects.select_for_update().get_or_create(pk=1)
+            settings.options = {**settings.options, **form.options()}
+            settings.save(update_fields=["options"])
         messages.success(request, "Cable Editor settings saved.")
         return redirect(SETTINGS_ROUTE)
     return render(request, "nbcableeditor/settings.html", {
         "groups": [(title, help_text, [form[key] for key in keys]) for title, help_text, keys in SETTINGS_GROUPS],
         "form": form,
+        **calculator_settings_context(request, options, calculator_context),
     })

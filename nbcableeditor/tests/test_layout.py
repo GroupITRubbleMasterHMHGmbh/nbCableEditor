@@ -320,7 +320,8 @@ class RackLayoutTestCase(TestCase):
         PortPlacement.objects.create(front_port_template=front_template, face="front", x=0.3, y=0.4)
         PortPlacement.objects.create(rear_port_template=rear_template, face="rear", x=0.6, y=0.4)
         lead = Cable.objects.create(a_terminations=[switch_port], b_terminations=[panel_front])
-        backbone = Cable.objects.create(a_terminations=[panel_rear], b_terminations=[outlet_rear], color="cc8833")
+        backbone = Cable.objects.create(a_terminations=[panel_rear], b_terminations=[outlet_rear], color="cc8833",
+                                        label="Backbone to wall outlet")
         front_id = f"front-port:{panel_front.pk}"
         rear_id = f"rear-port:{panel_rear.pk}"
 
@@ -360,7 +361,11 @@ class RackLayoutTestCase(TestCase):
             [switch_port.name, panel_front.name, panel_rear.name, outlet_rear.name, outlet_front.name],
         )
         self.assertEqual([hop.get("portId") for hop in trace["hops"]], [switch_port.pk, front_id, rear_id, None, None])
-        self.assertEqual(trace["segments"], [{"id": backbone.pk, "a": rear_id, "b": None, "color": "cc8833"}])
+        segment, = trace["segments"]
+        self.assertEqual((segment["id"], segment["a"], segment["b"], segment["color"], segment["label"]),
+                         (backbone.pk, rear_id, None, "cc8833", "Backbone to wall outlet"))
+        self.assertEqual(segment["endpointA"]["portName"], panel_rear.name)
+        self.assertEqual(segment["endpointB"]["portName"], outlet_rear.name)
 
         client_vlan = VLAN.objects.create(vid=20, name="Client network")
         client_port.mode = InterfaceModeChoices.MODE_ACCESS

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nbCableEditor"
-version = "0.10.61"
+version = "0.10.64"
 description = "nbCableEditor adds visual port placement and in-rack cabling to NetBox."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -27,7 +27,7 @@ def _move_cursor(db, journal, target):
     journal.revision = revision
 
 
-def record_history(db, journal, changes, label):
+def record_history(db, journal, changes, label, *, atomic_plan=False):
     """Append one edit to the locked journal and discard its superseded redo entries."""
     if not changes:
         return
@@ -36,12 +36,13 @@ def record_history(db, journal, changes, label):
         entries.filter(sequence__gt=journal.cursor).delete()
         sequence = journal.cursor + 1
         CableHistoryEntry.objects.using(db).create(
-            journal_id=journal.pk, sequence=sequence, changes=changes, label=label,
+            journal_id=journal.pk, sequence=sequence,
+            changes={"plan": changes} if atomic_plan else changes, label=label,
         )
         _move_cursor(db, journal, sequence)
 
 
-def jump_history(db, journal, target, revision, apply_change):
+def jump_history(db, journal, target, revision, apply_change, *, apply_plan=None):
     """Replay the deltas needed to reach target, or roll back the entire jump."""
     if type(revision) is not int or revision < 0 or type(target) is not int or target < 0:
         raise HistoryConflictError("Choose a valid cable history checkpoint.", 400)
@@ -61,7 +62,14 @@ def jump_history(db, journal, target, revision, apply_change):
             "-sequence" if undo else "sequence"
         ).values_list("changes", flat=True)
         for changes in batches.iterator(chunk_size=64):
-            if undo:
+            if isinstance(changes, dict):
+                if apply_plan is None:
+                    raise HistoryConflictError("This cable plan cannot be replayed.")
+                apply_plan([
+                    (change["after"], change["before"]) if undo else (change["before"], change["after"])
+                    for change in changes["plan"]
+                ])
+            elif undo:
                 for change in reversed(changes):
                     apply_change(change["after"], change["before"])
             else:

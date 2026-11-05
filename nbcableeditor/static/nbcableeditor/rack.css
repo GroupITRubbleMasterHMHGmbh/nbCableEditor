@@ -37,6 +37,133 @@
 
 .re-rack [hidden] { display: none !important; }
 
+/* Rack planning */
+.re-rack-plan-controls,
+.re-rack-plan-bar,
+.re-rack-plan-caption,
+.re-rack-plan-actions,
+.re-rack-plan-report-controls,
+.re-rack-plan-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem .5rem;
+}
+
+.re-rack-plan-controls .form-select { width: auto; max-width: 13rem; }
+.re-rack-plan-message { padding-inline: .15rem; }
+.re-rack-plan-bar {
+  padding: .4rem .6rem;
+  border-bottom: 1px solid var(--tblr-border-color);
+  background: var(--tblr-bg-surface-secondary);
+}
+
+.re-rack-plan-caption { margin-inline-end: auto; }
+.re-rack-plan-name { overflow-wrap: anywhere; }
+.re-rack-plan-key {
+  display: inline-flex;
+  align-items: center;
+  gap: .32rem;
+  color: var(--re-rack-text);
+  font-size: .72rem;
+}
+
+.re-rack-plan-key::before {
+  width: .85rem;
+  border-top: 3px dashed #7b63df;
+  content: "";
+}
+
+.re-rack-plan-key-released::before {
+  width: .65rem;
+  height: .65rem;
+  border: 2px dashed var(--re-rack-free-stroke);
+  border-radius: .15rem;
+}
+
+.re-rack-plan-opacity {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+}
+
+.re-rack-plan-opacity input { width: clamp(3rem, 10vw, 6rem); accent-color: var(--tblr-primary); }
+.re-rack-plan-opacity output { min-width: 2.2rem; font-variant-numeric: tabular-nums; }
+
+.re-rack[data-plan-view="mixed"] [data-inventory-wires] { opacity: var(--re-rack-stock-opacity, .3); }
+.re-rack[data-plan-view="plan"] :is([data-inventory-wires], [data-bundle-panel], [data-connections-section]) { display: none; }
+.re-rack:is([data-plan-view="mixed"], [data-plan-view="plan"])
+  :is(.re-rack-mode-buttons, .re-rack-quick-actions, [data-history-undo], [data-history-redo],
+    [data-history-open], [data-modal-delete], [data-cancel]) { display: none; }
+
+.re-rack[data-plan-view="mixed"] [data-inventory-wires] :is([data-wire], [data-cable-bundle], [data-wire-sleeve]) {
+  pointer-events: none;
+}
+
+.re-rack-wire-plan,
+.re-rack-wire-plan-rim {
+  stroke-dasharray: 5 3;
+  opacity: 1;
+}
+
+.re-rack-wire-plan-active,
+.re-rack [data-plan-wires] > .re-rack-wire-plan:has(+ .re-rack-wire-plan-hit:hover) {
+  stroke-width: calc(4px * var(--re-rack-cable-scale));
+  opacity: 1;
+}
+
+.re-rack-wire-plan-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12px;
+  stroke-linecap: round;
+  cursor: pointer;
+  pointer-events: stroke;
+}
+
+.re-rack-port-marker[data-plan-port="connected"] { outline: 2px solid #ac8cfa; }
+.re-rack-port-marker[data-plan-port="released"] { outline: 2px dashed var(--re-rack-free-stroke); }
+.re-rack-port-marker[data-plan-port="conflict"] { outline: 2px dashed #fb6b56; }
+.re-rack-port[data-plan-target] { outline: 2px solid #b3deff; outline-offset: 2px; }
+.re-rack [data-plan-port] :is(.re-rack-port-badge-cabled, .re-rack-port-badge-free) { display: none; }
+.re-rack [data-plan-port] .re-rack-port-meta::after {
+  color: var(--tblr-secondary);
+  font-size: .72rem;
+  content: attr(data-plan-status);
+}
+
+.re-rack .re-rack-plan-dialog { width: min(58rem, calc(100vw - 1.5rem)); }
+.re-rack-plan-tooltip-note { margin: .35rem 0 0; color: var(--re-rack-text); font-size: .75rem; font-weight: 650; }
+.re-rack-plan-dialog-heading,
+.re-rack-plan-change-row,
+.re-rack-plan-manage-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .45rem .7rem;
+}
+
+.re-rack-plan-dialog-heading { margin-bottom: .7rem; }
+.re-rack-plan-dialog-heading .re-rack-dialog-title { margin-bottom: 0; }
+.re-rack-plan-dialog-actions { flex-wrap: wrap; margin-top: .75rem; }
+.re-rack-plan-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: .65rem;
+  margin-block: .45rem .85rem;
+}
+
+.re-rack-plan-field { display: grid; align-content: start; gap: .25rem; }
+.re-rack-plan-form > .re-rack-plan-field { margin-bottom: .65rem; }
+.re-rack-plan-report-controls { align-items: end; margin-bottom: .8rem; }
+.re-rack-plan-report-controls a { margin-inline-start: auto; }
+.re-rack-plan-report-controls a:not([href]) { visibility: hidden; }
+.re-rack-plan-table th { white-space: nowrap; }
+.re-rack-plan-table td { min-width: 5rem; }
+.re-rack-plan-issues { padding-inline-start: 1.25rem; margin-bottom: .75rem; }
+
+
 .re-rack-workspace {
   --re-rack-sidebar-width: clamp(16rem, 25%, 22rem);
   --re-rack-workspace-gap: .55rem;
@@ -443,7 +570,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   --re-rack-side-bay: var(--re-rack-extra-bay);
   --re-rack-sleeve-side-bay: 0px;
   --re-rack-end-bay: calc(var(--re-rack-extra-bay) / 3);
-  --re-rack-board-top: calc(var(--re-rack-route-top) + var(--re-rack-end-bay) + var(--re-rack-settings-route-end, 0px));
+  --re-rack-board-top: calc(var(--re-rack-route-top) + var(--re-rack-end-bay) + var(--re-rack-settings-route-end, 0px) + var(--re-rack-tube-end-space, 0px));
   --re-rack-detail-scale: 1;
   --re-rack-cable-scale: 1;
   position: relative;
@@ -451,7 +578,7 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
   display: grid;
   grid-template-columns: minmax(0, 1fr) 4.25rem minmax(0, 1fr);
   padding-block: var(--re-rack-board-top)
-    calc(var(--re-rack-route-bottom) + var(--re-rack-end-bay) + var(--re-rack-settings-route-end, 0px));
+    calc(var(--re-rack-route-bottom) + var(--re-rack-end-bay) + var(--re-rack-settings-route-end, 0px) + var(--re-rack-tube-end-space, 0px));
   padding-inline: calc(var(--re-rack-wire-start) + .75rem + var(--re-rack-route-space-start) + var(--re-rack-side-bay) + var(--re-rack-sleeve-side-bay) + var(--re-rack-settings-route-side, 0px))
     calc(.75rem + var(--re-rack-route-space-end) + var(--re-rack-side-bay) + var(--re-rack-sleeve-side-bay) + var(--re-rack-settings-route-side, 0px));
 }
@@ -2272,6 +2399,13 @@ details[open] > .re-rack-filter-summary::after { transform: rotate(180deg); }
 .re-rack-inspector-inner {
   padding-top: 0;
   overflow-wrap: anywhere;
+}
+
+[data-connection-search]::-webkit-search-cancel-button { display: none; }
+
+.re-rack-connection-search-hit {
+  color: var(--re-rack-trace-accent);
+  font-size: .74rem;
 }
 
 .re-rack-sidebar-fields { margin-bottom: .45rem; }

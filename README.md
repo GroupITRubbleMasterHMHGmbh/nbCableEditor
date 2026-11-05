@@ -2,7 +2,7 @@
 
 nbCableEditor lets you design device faces and manage rack cabling directly in NetBox. Place ports on device images or custom drawings, connect and move cables in the rack view, and trace links through patch panels to wall outlets and endpoints.
 
-Version **0.10.61** supports **NetBox 4.5.10 and later 4.5 releases** and requires **Python 3.12 or later** in the NetBox environment.
+Version **0.10.63** supports **NetBox 4.5.10 and later 4.5 releases** and requires **Python 3.12 or later** in the NetBox environment.
 
 - [User guide](docs/user-guide.md)
 - [Installation, upgrades, and permissions](docs/installation.md)
@@ -22,6 +22,7 @@ Open a rack in NetBox and select **Cable Editor**. Start with **View → Rack si
 - [Find ports by VLAN and configure port colors](docs/user-guide.md#find-ports-by-vlan)
 - [Connect, trace, and edit cables](docs/user-guide.md#inspect-and-change-connections)
 - [Export a rack plan to PNG or PDF](docs/user-guide.md#export-the-rack-plan)
+- [Plan wiring changes and export a cable shopping list](docs/user-guide.md#plan-rack-wiring)
 
 ![Cable tooltip with enlarged port previews and an arrow from the source to the destination](docs/screenshots/user-guide-cable-hover.png)
 
@@ -49,6 +50,12 @@ When the login page is available, press **Ctrl+C** to leave the log view. Collec
 ```sh
 docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py collectstatic --no-input
 docker compose -f dev/compose.yaml exec netbox sh -c "/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < /plugin/dev/demo.py"
+```
+
+For an existing deployment, run the plugin migrations after upgrading and then collect static files and reload NetBox.
+
+```sh
+docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py migrate nbcableeditor --no-input
 ```
 
 Open **Lab Rack 01** in NetBox and select **Cable Editor**. The rack contains two 48-port switches, **Patch Panel PP-01**, and **Modular Chassis MC-01**. The wall outlets and endpoints are in **Demo Office**, outside the rack.

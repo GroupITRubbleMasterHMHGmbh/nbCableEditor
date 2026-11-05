@@ -51,6 +51,8 @@
   const TUBE_BORDER_RADIUS = .75;
   const CURVE_SAMPLE_ALLOWANCE = .25;
   const MAX_EXTRA_TRAVEL = 96;
+  const DENSE_RUN_SIZE = 12;
+  const USEFUL_SLEEVE_LENGTH = 60;
 
   function runsAlongTube(a, b, axis = "vertical") {
     const dx = Math.abs(a.x - b.x);
@@ -88,7 +90,7 @@
     return [Math.min(y1, y2), Math.max(y1, y2)];
   }
 
-  function clearTubeSection(x, width, from, to, foreign, obstacles, spacing, axis = "vertical") {
+  function blockedTubeSections(x, width, foreign, obstacles, spacing, axis = "vertical") {
     const {tubeGap, parallelGap, foreignClearance, parallelClearance} = spacing;
     const blocks = [];
     for (const obstacle of obstacles) {
@@ -100,13 +102,21 @@
       blocks.push([obstacle.top - end, obstacle.bottom + end]);
     }
     for (const segment of foreign) {
-      if (segment.top > to + foreignClearance || segment.bottom < from - foreignClearance) continue;
       const side = runsAlongTube(segment.a, segment.b) ? parallelClearance : foreignClearance;
       const blocked = sectionWithinColumns(segment, x - width / 2 - side, x + width / 2 + side);
       if (blocked) blocks.push([blocked[0] - foreignClearance, blocked[1] + foreignClearance]);
     }
     blocks.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const block of blocks) {
+      const previous = merged.at(-1);
+      if (previous && block[0] <= previous[1]) previous[1] = Math.max(previous[1], block[1]);
+      else merged.push(block);
+    }
+    return merged;
+  }
 
+  function clearTubeSection(from, to, blocks) {
     let top = from;
     let best;
     function consider(bottom) {
@@ -146,10 +156,16 @@
   }
 
   function hits(a, b, rect, clearance, sideClearance = clearance) {
-    return Math.min(a.x, b.x) < rect.right + sideClearance &&
-      Math.max(a.x, b.x) > rect.left - sideClearance &&
-      Math.min(a.y, b.y) < rect.bottom + clearance &&
-      Math.max(a.y, b.y) > rect.top - clearance;
+    const left = Math.min(a.x, b.x);
+    const right = Math.max(a.x, b.x);
+    const top = Math.min(a.y, b.y);
+    const bottom = Math.max(a.y, b.y);
+    if (left >= rect.right + sideClearance || right <= rect.left - sideClearance ||
+        top >= rect.bottom + clearance || bottom <= rect.top - clearance) return false;
+    if (left === right || top === bottom) return true;
+    const section = sectionWithinColumns({a, b, left, right, top, bottom},
+      rect.left - sideClearance, rect.right + sideClearance);
+    return section[0] < rect.bottom + clearance && section[1] > rect.top - clearance;
   }
 
   function pathIsClear(points, start, end, obstacles, protectedAreas, bounds, clearance, deviceClearance, fan = false) {
@@ -172,6 +188,11 @@
     return true;
   }
 
+  function fanPoints(port, lane, {rails, shoulder}, index) {
+    const rail = rails[index];
+    return [port, {x: port.x, y: shoulder ?? rail}, {x: lane, y: rail}];
+  }
+
   function fanLayouts(ports, peers, lanes, edge, direction, outward,
     obstacles, protectedAreas, bounds, clearance, deviceClearance) {
     const ranks = fanRanks(ports, lanes);
@@ -183,7 +204,33 @@
     // independently at each device, with the original close fan as the last fallback.
     const fallbackGaps = [desiredGap, BRANCH_CLEARANCE, 17, 10, minGap];
     const outsideRoom = direction < 0 ? edge : bounds.height - edge;
+    function add(layout) {
+      if (ports.every((port, i) => pathIsClear(fanPoints(port, lanes[i], layout, i), port, peers[i],
+        obstacles, protectedAreas, bounds, clearance, deviceClearance, true))) layouts.push(layout);
+    }
+    if (ports.length >= DENSE_RUN_SIZE && !outward) {
+      // A monotone taper brings a whole row into the sleeve in a fixed depth.
+      // The first segment stays perpendicular to the panel, clear of the next port.
+      for (const gap of new Set(fallbackGaps.map(gap => Math.max(gap, minGap)))) {
+        for (const depth of [12, 7]) {
+          add({
+            shoulder: edge + direction * gap,
+            rails: ports.map(() => edge + direction * (gap + depth)),
+            loss: 2 * Math.max(0, desiredGap - gap) + 12 - depth,
+          });
+        }
+      }
+      if (layouts.length) return layouts.sort((a, b) => a.loss - b.loss);
+    }
     const pitches = lastRank ? [BRANCH_PITCH, 6, 3.5] : [BRANCH_PITCH];
+    if (ports.length >= DENSE_RUN_SIZE && outward && lastRank) {
+      const availablePitch = (outsideRoom - Math.max(minGap, 10)) / lastRank;
+      if (availablePitch < 3.5) {
+        // Outward returns still need staggered rails to avoid crossing their own fans.
+        const compactPitch = Math.max(1.35, Math.min(3.5, availablePitch));
+        pitches.push(compactPitch, 1.35);
+      }
+    }
     for (const pitch of pitches) {
       const gaps = new Set(fallbackGaps.map(gap => Math.max(gap, minGap)));
       if (outward) {
@@ -194,11 +241,7 @@
       }
       for (const gap of gaps) {
         const rails = ranks.map(rank => edge + direction * (gap + rank * pitch));
-        const clear = ports.every((port, i) => {
-          const points = [port, {x: port.x, y: rails[i]}, {x: lanes[i], y: rails[i]}];
-          return pathIsClear(points, port, peers[i], obstacles, protectedAreas, bounds, clearance, deviceClearance, true);
-        });
-        if (clear) layouts.push({rails, loss: 2 * (Math.max(0, desiredGap - gap) + lastRank * (BRANCH_PITCH - pitch))});
+        add({rails, loss: 2 * (Math.max(0, desiredGap - gap) + lastRank * (BRANCH_PITCH - pitch))});
       }
     }
     return layouts.sort((a, b) => a.loss - b.loss);
@@ -232,6 +275,7 @@
     const lowerPorts = ends.map(([, port]) => port);
     const upperExit = preferredExit(upperPorts, upper, 1);
     const lowerExit = preferredExit(lowerPorts, lower, -1);
+    const coverageWeight = ids.length >= DENSE_RUN_SIZE ? 1.5 : 0;
     const pitch = Math.min(LANE_PITCH, 8 / (ids.length - 1));
     const width = (ids.length - 1) * pitch + 2 * TUBE_PADDING;
     const relevant = [...cards.values()].filter(card => card.bottom >= upper.top && card.top <= lower.bottom);
@@ -266,13 +310,14 @@
       for (const x of nearest) columns.add(x);
     }
     let bestExits = Infinity;
-    let bestLoss = Infinity;
+    let bestScore = Infinity;
     let shortest = Infinity;
     let finalists = [];
     const tubeObstacles = [...obstacles, ...protectedAreas];
     const priorTubes = obstacles.filter(obstacle => obstacle.cableClearance !== undefined);
     for (const x of columns) {
       if (x < boardLeft || x > boardRight) continue;
+      let blocks;
       const laneXs = ids.map((_, i) => x + (i - (ids.length - 1) / 2) * pitch);
       for (const directionA of [upperExit, -upperExit]) {
         for (const directionB of [lowerExit, -lowerExit]) {
@@ -288,25 +333,29 @@
             directionB, directionB > 0, obstacles, protectedAreas, bounds, clearance, deviceClearance);
           for (const first of layoutsA) for (const last of layoutsB) {
             const loss = first.loss + last.loss;
-            if (exits === bestExits && loss > bestLoss) break;
+            if (exits === bestExits && loss - USEFUL_SLEEVE_LENGTH * coverageWeight > bestScore) break;
             const railA = first.rails;
             const railB = last.rails;
             const top = Math.max(...railA) + 2;
             const bottom = Math.min(...railB) - 2;
             if (bottom - top < MIN_TUBE_LENGTH) continue;
-            const section = clearTubeSection(x, width, top, bottom, foreign, tubeObstacles, spacing);
+            blocks ??= blockedTubeSections(x, width, foreign, tubeObstacles, spacing);
+            const section = clearTubeSection(top, bottom, blocks);
             if (!section) continue;
+            const span = section.bottom - section.top;
+            const score = loss - Math.min(span, USEFUL_SLEEVE_LENGTH) * coverageWeight;
+            if (exits === bestExits && score > bestScore) continue;
 
             const paths = new Map();
             let length = 0;
             for (const [index, [start, end]] of ends.entries()) {
               const firstLane = lanesA[index];
               const lastLane = lanesB[index];
-              const points = [start, {x: start.x, y: railA[index]}, {x: firstLane, y: railA[index]}];
+              const points = fanPoints(start, firstLane, first, index);
               if (firstLane !== lastLane) {
                 points.push({x: firstLane, y: section.top + 3}, {x: lastLane, y: section.bottom - 3});
               }
-              points.push({x: lastLane, y: railB[index]}, {x: end.x, y: railB[index]}, end);
+              points.push(...fanPoints(end, lastLane, last, index).reverse());
               if (!pathIsClear(points, start, end, obstacles, protectedAreas, bounds, clearance, deviceClearance)) break;
               for (let i = 1; i < points.length; i++) {
                 length += Math.abs(points[i].x - points[i - 1].x) + Math.abs(points[i].y - points[i - 1].y);
@@ -316,28 +365,33 @@
             }
             if (paths.size !== ids.length) continue;
             const travel = length / paths.size;
-            const span = section.bottom - section.top;
-            const betterFit = exits < bestExits || loss < bestLoss;
+            const betterFit = exits < bestExits || score < bestScore;
             if (!betterFit && (travel > shortest + MAX_EXTRA_TRAVEL ||
                 finalists.some(plan => plan.travel <= travel && plan.span >= span))) continue;
             const projected = new Map([...paths].map(([id, points]) => [id, compactPoints(id, points)]));
             if (priorTubes.length && [...projected.values()].some(points => !clearsPriorTubes(points, priorTubes))) continue;
             if (betterFit) {
               bestExits = exits;
-              bestLoss = loss;
+              bestScore = score;
               shortest = Infinity;
               finalists = [];
             }
             shortest = Math.min(shortest, travel);
             finalists = finalists.filter(plan => plan.travel <= shortest + MAX_EXTRA_TRAVEL &&
               (plan.travel < travel || plan.span > span));
-            finalists.push({paths, projected, tube: {ids, x, width, ...section}, travel, span});
+            finalists.push({paths, projected, tube: {ids, x, width, ...section}, travel, span, loss});
           }
         }
       }
+      // With both rows facing the gap, a centered taper that already covers a useful
+      // part of the gap does not need to compete with routes around the rack sides.
+      if (coverageWeight && x === middle && upperExit > 0 && lowerExit < 0 &&
+          bestExits === 0 && finalists.some(plan => plan.span >= Math.max(
+            MIN_TUBE_LENGTH, Math.min(USEFUL_SLEEVE_LENGTH, (lower.top - upper.bottom) / 4),
+          ))) break;
     }
     const best = finalists.sort((a, b) => b.span - a.span || a.travel - b.travel)[0];
-    return best ? {...best, exits: bestExits, loss: bestLoss} : null;
+    return best ? {...best, exits: bestExits} : null;
   }
 
   function transposeBox({left, right, top, bottom, ...properties}) {
@@ -410,7 +464,8 @@
       const edgeGap = deviceEdgeClearance + TUBE_PADDING + TUBE_BORDER_RADIUS;
       const loss = 2 * (Math.max(0, edgeGap - startDistance) + Math.max(0, edgeGap - endDistance));
       if (exits > bestExits || (exits === bestExits && loss > bestLoss)) continue;
-      const section = clearTubeSection(y, width, left, right, transposedForeign, tubeObstacles, spacing, "horizontal");
+      const section = clearTubeSection(left, right,
+        blockedTubeSections(y, width, transposedForeign, tubeObstacles, spacing, "horizontal"));
       if (!section) continue;
       const span = section.bottom - section.top;
       const lanes = ids.map((_, i) => y + (i - (ids.length - 1) / 2) * pitch);
@@ -512,5 +567,5 @@
     return {paths, tubes};
   }
 
-  globalThis.NbCableEditorVirtualCombine = {findRuns, planTubes};
+  globalThis.NbCableEditorVirtualCombine = {findRuns, planTubes, denseRunSize: DENSE_RUN_SIZE};
 })();
