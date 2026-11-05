@@ -1,8 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-require("../netbox_rack_editor/static/netbox_rack_editor/rack-vlan-colors.js");
+require("../nbcableeditor/static/nbcableeditor/rack-vlan-colors.js");
 
-const {rule, restore, fill} = globalThis.NetBoxRackVlanColors;
+const {rule, restore, fill} = globalThis.NbCableEditorVlanColors;
 
 test("VLAN fill prioritizes the first matching rule over the VLAN's own color and fallback", () => {
   const settings = restore({

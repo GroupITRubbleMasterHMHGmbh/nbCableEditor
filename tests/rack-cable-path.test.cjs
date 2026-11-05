@@ -1,9 +1,9 @@
 const assert = require("node:assert/strict");
 const {test} = require("node:test");
 
-require("../netbox_rack_editor/static/netbox_rack_editor/rack-cable-path.js");
+require("../nbcableeditor/static/nbcableeditor/rack-cable-path.js");
 
-const {anchorPorts, roundPath} = globalThis.NetBoxRackCablePath;
+const {anchorPorts, roundPath} = globalThis.NbCableEditorCablePath;
 const route = [{x: 0, y: 0}, {x: 50, y: 0}, {x: 50, y: 50}];
 
 test("anchors diagonal routes at the midpoint of the edge they leave", () => {

@@ -11,8 +11,8 @@ from django.db import transaction
 from ipam.models import VLAN, VLANGroup
 from PIL import Image, ImageDraw, ImageFont
 
-from netbox_rack_editor.cable_views import port_unavailable
-from netbox_rack_editor.models import PortPlacement
+from nbcableeditor.cable_views import port_unavailable
+from nbcableeditor.models import PortPlacement
 
 from dev.module_demo import seed_module_demo
 
@@ -146,12 +146,12 @@ def seed_patch_demo(rack, switch, manufacturer):
 
     outlet_type = passive_type(manufacturer, "demo-wall-outlet", "Demo RJ45 Wall Outlet", ["RJ45"])
     passive_role, _ = DeviceRole.objects.get_or_create(
-        slug="rack-editor-demo-passive", defaults={"name": "Demo Passive Cabling", "color": "66788a"},
+        slug="nbcableeditor-demo-passive", defaults={"name": "Demo Passive Cabling", "color": "66788a"},
     )
     client_role, _ = DeviceRole.objects.get_or_create(
-        slug="rack-editor-demo-client", defaults={"name": "Demo Endpoint", "color": "168577"},
+        slug="nbcableeditor-demo-client", defaults={"name": "Demo Endpoint", "color": "168577"},
     )
-    office, _ = Location.objects.get_or_create(site=site, slug="rack-editor-demo-office",
+    office, _ = Location.objects.get_or_create(site=site, slug="nbcableeditor-demo-office",
                                                defaults={"name": "Demo Office"})
 
     panel_name = "Patch Panel PP-01"
@@ -191,7 +191,7 @@ def seed_patch_demo(rack, switch, manufacturer):
         )
 
     vlan_group, _ = VLANGroup.objects.get_or_create(
-        slug="rack-editor-demo", defaults={"name": "Rack Editor Demo"},
+        slug="nbcableeditor-demo", defaults={"name": "Cable Editor Demo"},
     )
     clients, _ = VLAN.objects.get_or_create(group=vlan_group, vid=50, defaults={"name": "Lab Clients"})
     management, _ = VLAN.objects.get_or_create(group=vlan_group, vid=99, defaults={"name": "Lab Management"})
@@ -249,10 +249,10 @@ def seed_patch_demo(rack, switch, manufacturer):
 
 
 with transaction.atomic():
-    site, _ = Site.objects.get_or_create(slug="rack-editor-demo", defaults={"name": "Rack Editor Demo"})
+    site, _ = Site.objects.get_or_create(slug="nbcableeditor-demo", defaults={"name": "Cable Editor Demo"})
     rack, _ = Rack.objects.get_or_create(site=site, name="Lab Rack 01", defaults={"u_height": 12})
     manufacturer, _ = Manufacturer.objects.get_or_create(
-        slug="rack-editor-demo", defaults={"name": "Rack Editor Demo"}
+        slug="nbcableeditor-demo", defaults={"name": "Cable Editor Demo"}
     )
     device_type, _ = DeviceType.objects.get_or_create(
         manufacturer=manufacturer, slug="switch-48",
@@ -274,7 +274,7 @@ with transaction.atomic():
             defaults={"face": PortPlacement.Face.FRONT, "x": (165 + 40 * column) / 1200, "y": (34 + 42 * row) / 108},
         )
     role, _ = DeviceRole.objects.get_or_create(
-        slug="rack-editor-demo", defaults={"name": "Demo Switch", "color": "4a81b8"}
+        slug="nbcableeditor-demo", defaults={"name": "Demo Switch", "color": "4a81b8"}
     )
     switches = {}
     for name, position in (("Switch A", 9), ("Switch B", 6)):

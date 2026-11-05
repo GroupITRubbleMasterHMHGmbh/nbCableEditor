@@ -1,9 +1,9 @@
 const assert = require("node:assert/strict");
 const {test} = require("node:test");
 
-require("../netbox_rack_editor/static/netbox_rack_editor/rack-tooltip.js");
+require("../nbcableeditor/static/nbcableeditor/rack-tooltip.js");
 
-const {visibleSegments, nearestPoint, place} = globalThis.NetBoxRackTooltip;
+const {visibleSegments, nearestPoint, place} = globalThis.NbCableEditorTooltip;
 const point = (x, y) => ({x, y});
 
 test("only the visible route participates in pointer projection", () => {

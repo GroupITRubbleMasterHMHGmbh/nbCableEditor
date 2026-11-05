@@ -1,10 +1,10 @@
 const assert = require("node:assert/strict");
 const {test} = require("node:test");
 
-require("../netbox_rack_editor/static/netbox_rack_editor/rack-routing.js");
-require("../netbox_rack_editor/static/netbox_rack_editor/rack-corridors.js");
+require("../nbcableeditor/static/nbcableeditor/rack-routing.js");
+require("../nbcableeditor/static/nbcableeditor/rack-corridors.js");
 
-const {routeCables} = globalThis.NetBoxRackRouting;
+const {routeCables} = globalThis.NbCableEditorRouting;
 
 function pathLength(routes) {
   let length = 0;
@@ -140,8 +140,8 @@ test("the corridor fallback validates endpoint exemption and wins with the only 
   const connection = {id: 1, a, b};
   const areas = [ownStart, foreign];
   let calls = 0;
-  const previous = globalThis.NetBoxRackCorridors;
-  globalThis.NetBoxRackCorridors = {
+  const previous = globalThis.NbCableEditorCorridors;
+  globalThis.NbCableEditorCorridors = {
     candidates(received, protectedAreas, board, clearSegment) {
       calls++;
       assert.equal(received, connection);
@@ -159,7 +159,7 @@ test("the corridor fallback validates endpoint exemption and wins with the only 
     assert.equal(calls, 1);
     assertOutsideArea(result.get(1), foreign);
   } finally {
-    globalThis.NetBoxRackCorridors = previous;
+    globalThis.NbCableEditorCorridors = previous;
   }
 });
 

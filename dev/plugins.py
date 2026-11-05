@@ -1,1 +1,1 @@
-PLUGINS = ["netbox_rack_editor"]
+PLUGINS = ["nbcableeditor"]

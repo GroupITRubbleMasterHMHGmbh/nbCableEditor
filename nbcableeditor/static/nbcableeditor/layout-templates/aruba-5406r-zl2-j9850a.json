@@ -1,0 +1,92 @@
+{
+  "$schema": "layout-template.schema.json",
+  "schemaVersion": 1,
+  "kind": "device",
+  "name": "Aruba 5406R zl2 J9850A",
+  "modelNumber": "J9850A",
+  "description": "4U 5406R zl2 base chassis. Six front line-card slots A–F map to existing NetBox module bays. Port positions come from the installed module layouts. Management, power and cooling regions are schematic.",
+  "sources": [
+    "https://support.hpe.com/hpesc/public/api/document/emr_na-c04655001?docLocale=en_US",
+    "https://www.hpe.com/psnow/doc/c04293383",
+    "https://arubanetworking.hpe.com/techdocs/AOS-S/16.10/MCG/KB/content/kb/sho-mod-det-vsf-mem.htm"
+  ],
+  "faces": {
+    "front": {
+      "items": [
+        {"kind":"rectangle","x":0.006,"y":0.025,"width":0.988,"height":0.95,"color":"#b9c4c9","borderColor":"#566672"},
+        {"kind":"rectangle","x":0.012,"y":0.047,"width":0.048,"height":0.905,"color":"#253745","borderColor":"#7e919a"},
+        {"kind":"text","x":0.036,"y":0.1,"text":"HPE","size":11,"font":"sans-serif","color":"#e3edf3"},
+        {"kind":"rectangle","x":0.025,"y":0.16,"width":0.023,"height":0.017,"color":"#69bb86"},
+        {"kind":"rectangle","x":0.025,"y":0.198,"width":0.023,"height":0.017,"color":"#84939e"},
+        {"kind":"rectangle","x":0.025,"y":0.236,"width":0.023,"height":0.017,"color":"#84939e"},
+        {"kind":"text","x":0.036,"y":0.86,"text":"zl2","size":11,"font":"sans-serif","color":"#e3edf3"},
+        {"kind":"rectangle","x":0.064,"y":0.046,"width":0.921,"height":0.165,"color":"#3b4a55","borderColor":"#6f818e"},
+        {"kind":"text","x":0.195,"y":0.093,"text":"5406R zl2","size":19,"font":"sans-serif","color":"#e3edf3"},
+        {"kind":"text","x":0.195,"y":0.158,"text":"J9850A","size":12,"font":"monospace","color":"#c1d2dd"},
+        {"kind":"rectangle","x":0.334,"y":0.069,"width":0.296,"height":0.115,"color":"#586b77","borderColor":"#8498a3"},
+        {"kind":"rectangle","x":0.638,"y":0.069,"width":0.338,"height":0.115,"color":"#586b77","borderColor":"#8498a3"},
+        {"kind":"text","x":0.482,"y":0.126,"text":"MANAGEMENT","size":12,"font":"sans-serif","color":"#e3edf3"},
+        {"kind":"text","x":0.806,"y":0.126,"text":"MANAGEMENT","size":12,"font":"sans-serif","color":"#e3edf3"},
+        {"kind":"rectangle","x":0.073,"y":0.231,"width":0.445,"height":0.225,"color":"#263745","borderColor":"#778c9b"},
+        {"kind":"rectangle","x":0.083,"y":0.247,"width":0.053,"height":0.046,"color":"#3e5868","borderColor":"#658093"},
+        {"kind":"text","x":0.1095,"y":0.271,"text":"A","size":17,"font":"monospace","color":"#eef6fa"},
+        {"kind":"rectangle","x":0.089,"y":0.411,"width":0.406,"height":0.01,"color":"#6a7e8c"},
+        {"kind":"rectangle","x":0.533,"y":0.231,"width":0.445,"height":0.225,"color":"#263745","borderColor":"#778c9b"},
+        {"kind":"rectangle","x":0.543,"y":0.247,"width":0.053,"height":0.046,"color":"#3e5868","borderColor":"#658093"},
+        {"kind":"text","x":0.5695,"y":0.271,"text":"B","size":17,"font":"monospace","color":"#eef6fa"},
+        {"kind":"rectangle","x":0.549,"y":0.411,"width":0.406,"height":0.01,"color":"#6a7e8c"},
+        {"kind":"rectangle","x":0.073,"y":0.48,"width":0.445,"height":0.225,"color":"#263745","borderColor":"#778c9b"},
+        {"kind":"rectangle","x":0.083,"y":0.496,"width":0.053,"height":0.046,"color":"#3e5868","borderColor":"#658093"},
+        {"kind":"text","x":0.1095,"y":0.52,"text":"C","size":17,"font":"monospace","color":"#eef6fa"},
+        {"kind":"rectangle","x":0.089,"y":0.66,"width":0.406,"height":0.01,"color":"#6a7e8c"},
+        {"kind":"rectangle","x":0.533,"y":0.48,"width":0.445,"height":0.225,"color":"#263745","borderColor":"#778c9b"},
+        {"kind":"rectangle","x":0.543,"y":0.496,"width":0.053,"height":0.046,"color":"#3e5868","borderColor":"#658093"},
+        {"kind":"text","x":0.5695,"y":0.52,"text":"D","size":17,"font":"monospace","color":"#eef6fa"},
+        {"kind":"rectangle","x":0.549,"y":0.66,"width":0.406,"height":0.01,"color":"#6a7e8c"},
+        {"kind":"rectangle","x":0.073,"y":0.729,"width":0.445,"height":0.225,"color":"#263745","borderColor":"#778c9b"},
+        {"kind":"rectangle","x":0.083,"y":0.745,"width":0.053,"height":0.046,"color":"#3e5868","borderColor":"#658093"},
+        {"kind":"text","x":0.1095,"y":0.769,"text":"E","size":17,"font":"monospace","color":"#eef6fa"},
+        {"kind":"rectangle","x":0.089,"y":0.909,"width":0.406,"height":0.01,"color":"#6a7e8c"},
+        {"kind":"rectangle","x":0.533,"y":0.729,"width":0.445,"height":0.225,"color":"#263745","borderColor":"#778c9b"},
+        {"kind":"rectangle","x":0.543,"y":0.745,"width":0.053,"height":0.046,"color":"#3e5868","borderColor":"#658093"},
+        {"kind":"text","x":0.5695,"y":0.769,"text":"F","size":17,"font":"monospace","color":"#eef6fa"},
+        {"kind":"rectangle","x":0.549,"y":0.909,"width":0.406,"height":0.01,"color":"#6a7e8c"}
+      ],
+      "ports": [],
+      "bays": [
+        {"name":"A","x":0.073,"y":0.231,"width":0.445,"height":0.225},
+        {"name":"B","x":0.533,"y":0.231,"width":0.445,"height":0.225},
+        {"name":"C","x":0.073,"y":0.48,"width":0.445,"height":0.225},
+        {"name":"D","x":0.533,"y":0.48,"width":0.445,"height":0.225},
+        {"name":"E","x":0.073,"y":0.729,"width":0.445,"height":0.225},
+        {"name":"F","x":0.533,"y":0.729,"width":0.445,"height":0.225}
+      ]
+    },
+    "rear": {
+      "items": [
+        {"kind":"rectangle","x":0.006,"y":0.028,"width":0.988,"height":0.944,"color":"#50616d","borderColor":"#81929d"},
+        {"kind":"rectangle","x":0.03,"y":0.065,"width":0.365,"height":0.825,"color":"#3b4b58","borderColor":"#8395a0"},
+        {"kind":"rectangle","x":0.403,"y":0.065,"width":0.365,"height":0.825,"color":"#3b4b58","borderColor":"#8395a0"},
+        {"kind":"text","x":0.2125,"y":0.335,"text":"POWER SUPPLY BAY 1","size":21,"font":"sans-serif","color":"#e3edf3"},
+        {"kind":"text","x":0.5855,"y":0.335,"text":"POWER SUPPLY BAY 2","size":21,"font":"sans-serif","color":"#e3edf3"},
+        {"kind":"rectangle","x":0.125,"y":0.51,"width":0.175,"height":0.07,"color":"#263542","borderColor":"#738793"},
+        {"kind":"rectangle","x":0.498,"y":0.51,"width":0.175,"height":0.07,"color":"#263542","borderColor":"#738793"},
+        {"kind":"rectangle","x":0.782,"y":0.065,"width":0.187,"height":0.825,"color":"#263644","borderColor":"#82939d"},
+        {"kind":"text","x":0.8755,"y":0.2,"text":"FAN TRAY","size":17,"font":"sans-serif","color":"#e3edf3"},
+        {"kind":"text","x":0.51,"y":0.925,"text":"5406R zl2  /  J9850A","size":15,"font":"monospace","color":"#dae6ed"},
+        {"kind":"rectangle","x":0.81,"y":0.31,"width":0.131,"height":0.035,"color":"#687b87"},
+        {"kind":"rectangle","x":0.81,"y":0.385,"width":0.131,"height":0.035,"color":"#687b87"},
+        {"kind":"rectangle","x":0.81,"y":0.46,"width":0.131,"height":0.035,"color":"#687b87"},
+        {"kind":"rectangle","x":0.81,"y":0.535,"width":0.131,"height":0.035,"color":"#687b87"},
+        {"kind":"rectangle","x":0.81,"y":0.61,"width":0.131,"height":0.035,"color":"#687b87"},
+        {"kind":"rectangle","x":0.81,"y":0.685,"width":0.131,"height":0.035,"color":"#687b87"},
+        {"kind":"rectangle","x":0.81,"y":0.76,"width":0.131,"height":0.035,"color":"#687b87"}
+      ],
+      "ports": [],
+      "bays": [
+        {"name":"PSU1","x":0.03,"y":0.065,"width":0.365,"height":0.825,"moduleFace":"rear"},
+        {"name":"PSU2","x":0.403,"y":0.065,"width":0.365,"height":0.825,"moduleFace":"rear"}
+      ]
+    }
+  }
+}

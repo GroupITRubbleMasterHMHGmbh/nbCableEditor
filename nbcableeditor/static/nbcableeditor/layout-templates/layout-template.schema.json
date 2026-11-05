@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "layout-template.schema.json",
+  "title": "nbCableEditor portable layout template",
+  "description": "Image-free artwork, interface and passive port slots, and module bays. Coordinates are normalized to the width and height of the face.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "name", "faces"],
+  "properties": {
+    "$schema": { "type": "string", "maxLength": 2048, "pattern": "\\S" },
+    "schemaVersion": { "const": 1 },
+    "kind": { "enum": ["device", "module"] },
+    "name": { "type": "string", "maxLength": 128, "pattern": "\\S" },
+    "modelNumber": { "type": "string", "maxLength": 128 },
+    "description": { "type": "string", "maxLength": 1024 },
+    "sources": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "maxLength": 2048,
+        "format": "uri",
+        "pattern": "^[hH][tT][tT][pP][sS]://[^/@?#\\s]+(?:[/?#][^\\s]*)?$"
+      }
+    },
+    "faces": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "front": {
+          "$ref": "#/$defs/face",
+          "properties": { "ports": { "items": { "properties": { "kind": { "enum": ["interface", "front-port"] } } } } }
+        },
+        "rear": {
+          "$ref": "#/$defs/face",
+          "properties": { "ports": { "items": { "properties": { "kind": { "enum": ["interface", "rear-port"] } } } } }
+        }
+      }
+    }
+  },
+  "$comment": "The editor also enforces a 512 KiB file limit, unique case-insensitive trimmed names per face and component kind, at most 256 artwork objects and bays together, Unicode safety, and x + width and y + height at most 1 (with a 1e-9 tolerance).",
+  "$defs": {
+    "coordinate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "dimension": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+    "color": { "type": ["string", "null"], "minLength": 7, "maxLength": 7, "pattern": "^#[0-9a-fA-F]{6}$" },
+    "artworkText": { "type": "string", "maxLength": 256, "pattern": "\\S" },
+    "font": { "enum": ["sans-serif", "serif", "monospace"] },
+    "fontSize": { "type": "number", "minimum": 8, "maximum": 96 },
+    "face": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "ports"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "oneOf": [{ "$ref": "#/$defs/text" }, { "$ref": "#/$defs/rectangle" }] }
+        },
+        "ports": {
+          "type": "array",
+          "maxItems": 512,
+          "items": { "$ref": "#/$defs/slot" }
+        },
+        "bays": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/bay" }
+        }
+      }
+    },
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "x", "y"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 64, "pattern": "\\S" },
+        "kind": { "enum": ["interface", "front-port", "rear-port"], "default": "interface" },
+        "label": { "type": "string", "maxLength": 64 },
+        "x": { "$ref": "#/$defs/coordinate" },
+        "y": { "$ref": "#/$defs/coordinate" }
+      }
+    },
+    "bay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "x", "y", "width", "height"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 64, "pattern": "\\S" },
+        "x": { "$ref": "#/$defs/coordinate" },
+        "y": { "$ref": "#/$defs/coordinate" },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" },
+        "moduleFace": { "enum": ["front", "rear"], "description": "Defaults to the face being imported." }
+      }
+    },
+    "text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "x", "y", "text", "font", "size"],
+      "properties": {
+        "kind": { "const": "text" },
+        "x": { "$ref": "#/$defs/coordinate" },
+        "y": { "$ref": "#/$defs/coordinate" },
+        "text": { "$ref": "#/$defs/artworkText" },
+        "font": { "$ref": "#/$defs/font" },
+        "size": { "$ref": "#/$defs/fontSize" },
+        "color": { "$ref": "#/$defs/color" }
+      }
+    },
+    "rectangle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "x", "y", "width", "height"],
+      "properties": {
+        "kind": { "const": "rectangle" },
+        "x": { "$ref": "#/$defs/coordinate" },
+        "y": { "$ref": "#/$defs/coordinate" },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" },
+        "color": { "$ref": "#/$defs/color" },
+        "borderColor": { "$ref": "#/$defs/color" },
+        "label": { "oneOf": [{ "$ref": "#/$defs/rectangleLabel" }, { "type": "null" }] }
+      }
+    },
+    "rectangleLabel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "font", "size", "position"],
+      "properties": {
+        "text": { "$ref": "#/$defs/artworkText" },
+        "font": { "$ref": "#/$defs/font" },
+        "size": { "$ref": "#/$defs/fontSize" },
+        "position": {
+          "enum": ["top-left", "top", "top-right", "bottom-left", "bottom", "bottom-right", "left", "right", "center"]
+        },
+        "color": { "$ref": "#/$defs/color" }
+      }
+    }
+  }
+}

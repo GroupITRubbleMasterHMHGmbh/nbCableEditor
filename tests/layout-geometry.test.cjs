@@ -1,7 +1,37 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const {alignPorts, snapPoint} = require("../netbox_rack_editor/static/netbox_rack_editor/layout-geometry.js");
+const {alignPorts, snapPoint, portOrders, orderedGridCell} = require("../nbcableeditor/static/nbcableeditor/layout-geometry.js");
+
+test("places an incomplete grid in all eight directions without alternating the direction of each line", () => {
+  const expected = {
+    rows: ["123", "45."],
+    "rows-reverse": ["321", ".54"],
+    "rows-bottom": ["45.", "123"],
+    "rows-bottom-reverse": [".54", "321"],
+    columns: ["135", "24."],
+    "columns-reverse": ["531", ".42"],
+    "columns-up": ["24.", "135"],
+    "columns-up-reverse": [".42", "531"],
+  };
+  assert.deepEqual(portOrders.map(({id}) => id), Object.keys(expected));
+  for (const {id} of portOrders) {
+    const grid = [Array(3).fill("."), Array(3).fill(".")];
+    for (let index = 0; index < 5; index++) {
+      const {column, row} = orderedGridCell(index, 3, 2, id);
+      grid[row][column] = index + 1;
+    }
+    assert.deepEqual(grid.map(row => row.join("")), expected[id], id);
+  }
+});
+
+test("orders grids with one row or one column and falls back to the default order", () => {
+  assert.deepEqual(orderedGridCell(1, 1, 3, "rows-bottom-reverse"), {column: 0, row: 1});
+  assert.deepEqual(orderedGridCell(0, 1, 3, "columns-up"), {column: 0, row: 2});
+  assert.deepEqual(orderedGridCell(0, 3, 1, "columns-up-reverse"), {column: 2, row: 0});
+  assert.deepEqual(orderedGridCell(0, 1, 1, "rows-bottom-reverse"), {column: 0, row: 0});
+  assert.deepEqual(orderedGridCell(3, 3, 2, "unknown"), {column: 0, row: 1});
+});
 
 test("aligns one axis while retaining identities, labels and positions on the other axis", () => {
   const points = [{id: 1, label: "A", x: .25, y: .125}, {id: 2, x: .75, y: .625}];

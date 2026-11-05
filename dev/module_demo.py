@@ -9,7 +9,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from extras.models import ImageAttachment
 
-from netbox_rack_editor.models import LayoutRevision, PortPlacement
+from nbcableeditor.models import LayoutRevision, PortPlacement
 
 from dev.module_demo_art import (
     BAY_BOXES, CHASSIS_SIZE, MODULE_PORT_CENTERS, MODULE_SIZE, chassis_artwork, module_artwork,
@@ -57,7 +57,7 @@ def seed_module_demo(rack):
         return
 
     manufacturer, _ = Manufacturer.objects.get_or_create(
-        slug="rack-editor-demo", defaults={"name": "Rack Editor Demo"},
+        slug="nbcableeditor-demo", defaults={"name": "Cable Editor Demo"},
     )
     chassis_type, _ = DeviceType.objects.get_or_create(
         manufacturer=manufacturer, slug="demo-modular-chassis",
@@ -99,7 +99,7 @@ def seed_module_demo(rack):
     chassis = existing
     if chassis is None:
         role, _ = DeviceRole.objects.get_or_create(
-            slug="rack-editor-demo-modular", defaults={"name": "Demo Modular Chassis", "color": "6357a0"},
+            slug="nbcableeditor-demo-modular", defaults={"name": "Demo Modular Chassis", "color": "6357a0"},
         )
         chassis = Device(
             site=rack.site, rack=rack, position=3 if 3 in available else available[0], face="front",

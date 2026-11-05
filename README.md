@@ -1,12 +1,13 @@
-# NetBox Rack Cable Editor
+# nbCableEditor
 
-Design device faces and manage rack cabling directly in NetBox. Place ports on device images or custom drawings, connect and move cables in the rack view, and trace links through patch panels to wall outlets and endpoints.
+nbCableEditor lets you design device faces and manage rack cabling directly in NetBox. Place ports on device images or custom drawings, connect and move cables in the rack view, and trace links through patch panels to wall outlets and endpoints.
 
-Version **0.10.51** supports **NetBox 4.5.10 and later 4.5 releases** and requires **Python 3.12 or later** in the NetBox environment.
+Version **0.10.61** supports **NetBox 4.5.10 and later 4.5 releases** and requires **Python 3.12 or later** in the NetBox environment.
 
 - [User guide](docs/user-guide.md)
 - [Installation, upgrades, and permissions](docs/installation.md)
 - [Local Docker demo](#local-docker-demo)
+- [Plugin settings and template import](docs/user-guide.md#configure-the-plugin)
 
 ![Rack view focused on the cables connected to the patch panel](docs/screenshots/rack-cable-focus.png)
 
@@ -14,7 +15,7 @@ The device cable filter shows the patch panel's direct connections and dims occu
 
 ## Work with cables in a rack
 
-Open a rack in NetBox and select **Cable editor**. Start with **View → Rack side → Front** and **Zoom → Fit**. Choose which devices and port rows to show, focus on one device's cables, or use a VLAN filter to find free ports.
+Open a rack in NetBox and select **Cable Editor**. Start with **View → Rack side → Front** and **Zoom → Auto** in the toolbar. Choose which devices and port rows to show, focus on one device's cables, or use a VLAN filter to find free ports.
 
 - [Filter devices, port rows, and cables](docs/user-guide.md#filter-devices-rows-and-cables)
 - [Choose a rack side, line mode, and routing strategy](docs/user-guide.md#choose-the-rack-view)
@@ -28,9 +29,11 @@ Open a rack in NetBox and select **Cable editor**. Start with **View → Rack si
 
 Open **Layout editor** from a device type or module type. Place individual ports or arrange a range in a grid. Add custom artwork, text, or module bays, then save the layout for every instance of that type. [Design a device or module layout](docs/user-guide.md#design-a-device-or-module-layout)
 
+Use **Import template** to start with one of 18 device or four module layouts, or upload your own image-free JSON template. Review the mappings to existing NetBox interfaces, passive ports, and module bays before applying the drawing. [Import a layout template](docs/user-guide.md#import-a-layout-template)
+
 ## Local Docker demo
 
-The Compose stack mounts the plugin from the checkout and serves NetBox at [localhost:8096](http://localhost:8096/). The demo uses local development credentials. For concurrent demos from separate checkouts, assign each one its own Compose project name and host port.
+The `nbcableeditor-dev` Compose stack mounts the plugin from the checkout and serves NetBox at [localhost:8096](http://localhost:8096/). The demo uses local development credentials. For concurrent demos from separate checkouts, assign each one its own Compose project name and host port.
 
 Sign in with username **`test`** and password **`test`**. The container creates this local superuser on startup if the account does not already exist.
 
@@ -48,7 +51,7 @@ docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/
 docker compose -f dev/compose.yaml exec netbox sh -c "/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < /plugin/dev/demo.py"
 ```
 
-Open **Lab Rack 01** in NetBox and select **Cable editor**. The rack contains two 48-port switches, **Patch Panel PP-01**, and **Modular Chassis MC-01**. The wall outlets and endpoints are in **Demo Office**, outside the rack.
+Open **Lab Rack 01** in NetBox and select **Cable Editor**. The rack contains two 48-port switches, **Patch Panel PP-01**, and **Modular Chassis MC-01**. The wall outlets and endpoints are in **Demo Office**, outside the rack.
 
 | Switch A | Patch panel jack | Wall outlet | Endpoint | VLAN on the switch port |
 | --- | --- | --- | --- | --- |
@@ -67,7 +70,7 @@ Select **Modular Chassis MC-01** under **Devices** and choose **View → Both**.
 To add just the chassis to an existing local demo, run the module seed from the checkout used by the Compose stack.
 
 ```sh
-docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c 'from dcim.models import Rack; from dev.module_demo import seed_module_demo; seed_module_demo(Rack.objects.get(site__slug="rack-editor-demo", name="Lab Rack 01"))'
+docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c 'from dcim.models import Rack; from dev.module_demo import seed_module_demo; seed_module_demo(Rack.objects.get(site__slug="nbcableeditor-demo", name="Lab Rack 01"))'
 ```
 
 Use `docker compose -f dev/compose.yaml stop` to pause the demo and `docker compose -f dev/compose.yaml start` to resume. The stack does not configure a persistent media volume for container rebuilds.
@@ -77,6 +80,6 @@ Use `docker compose -f dev/compose.yaml stop` to pause the demo and `docker comp
 Run the plugin tests in the demo container and the JavaScript tests with local Node.js.
 
 ```sh
-docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py test netbox_rack_editor
+docker compose -f dev/compose.yaml exec netbox /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py test nbcableeditor
 node --test tests/*.test.cjs
 ```

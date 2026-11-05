@@ -1,0 +1,73 @@
+{% extends 'base/layout.html' %}
+
+{% block title %}Cable Editor · Settings{% endblock %}
+
+{% block content %}
+  <div lang="en">
+    <header class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <p class="text-secondary mb-1">Cable Editor</p>
+        <h1 class="mb-1">Plugin settings</h1>
+        <p class="text-secondary mb-0">Set the starting view, drawing dimensions, and visible details for this NetBox instance.</p>
+      </div>
+      {% if perms.dcim.view_devicetype and perms.dcim.change_devicetype %}
+        <a class="btn btn-outline-primary" href="{% url 'plugins:nbcableeditor:layout-imports' %}">
+          <i class="mdi mdi-file-import-outline" aria-hidden="true"></i> Layout template import
+        </a>
+      {% endif %}
+    </header>
+    <form method="post">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      {% for title, description, fields in groups %}
+        <section class="card mb-3" aria-labelledby="nre-settings-section-{{ forloop.counter }}">
+          <div class="card-header">
+            <h2 class="card-title" id="nre-settings-section-{{ forloop.counter }}">{{ title }}</h2>
+          </div>
+          <div class="card-body">
+            <p class="text-secondary">{{ description }}</p>
+            <div class="row g-3">
+              {% for field in fields %}
+                {% if field.widget_type == "checkboxselectmultiple" %}
+                  <div class="col-sm-6 col-xl-4">
+                    <fieldset class="border rounded p-3 h-100">
+                      <legend class="float-none w-auto px-1 mb-2 fs-4">{{ field.label }}</legend>
+                      {% for option in field %}
+                        <div class="form-check">
+                          {{ option.tag }}
+                          <label class="form-check-label ms-2" for="{{ option.id_for_label }}">{{ option.choice_label }}</label>
+                        </div>
+                      {% empty %}
+                        <p class="text-secondary mb-0">No eligible cable custom fields. Add a visible Cable custom field in NetBox to list it here.</p>
+                      {% endfor %}
+                      {% if field.help_text %}<p class="form-text mb-0">{{ field.help_text }}</p>{% endif %}
+                      {{ field.errors }}
+                    </fieldset>
+                  </div>
+                {% elif field.widget_type == "checkbox" %}
+                  <div class="col-sm-6 col-xl-3">
+                    <div class="form-check">
+                      {{ field }}
+                      <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                      {{ field.errors }}
+                    </div>
+                  </div>
+                {% else %}
+                  <div class="col-sm-6 col-xl-3">
+                    <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<p class="form-text mb-0" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</p>{% endif %}
+                    {{ field.errors }}
+                  </div>
+                {% endif %}
+              {% endfor %}
+            </div>
+          </div>
+        </section>
+      {% endfor %}
+      <div class="d-flex justify-content-end">
+        <button class="btn btn-primary" type="submit">Save settings</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}

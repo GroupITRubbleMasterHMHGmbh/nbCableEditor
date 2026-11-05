@@ -1,12 +1,12 @@
 # Isolated localhost instance for plugin development; contains sample credentials.
-name: netbox-rack-editor-dev
+name: nbcableeditor-dev
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: netbox
       POSTGRES_USER: netbox
-      POSTGRES_PASSWORD: local-rack-editor-dev
+      POSTGRES_PASSWORD: local-nbcableeditor-dev
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U netbox"]
       interval: 2s
@@ -25,11 +25,11 @@ services:
       DB_HOST: postgres
       DB_NAME: netbox
       DB_USER: netbox
-      DB_PASSWORD: local-rack-editor-dev
+      DB_PASSWORD: local-nbcableeditor-dev
       REDIS_HOST: redis
       REDIS_CACHE_HOST: redis
       REDIS_CACHE_DATABASE: "1"
-      SECRET_KEY: dev-only-netbox-rack-editor-9Z7v-local-only-secret-key
+      SECRET_KEY: dev-only-nbcableeditor-9Z7v-local-netbox-development-key
       ALLOWED_HOSTS: localhost 127.0.0.1 testserver
       SUPERUSER_NAME: test
       SUPERUSER_EMAIL: test@example.invalid

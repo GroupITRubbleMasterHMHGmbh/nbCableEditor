@@ -1,0 +1,683 @@
+{% extends 'base/layout.html' %}
+{% load static %}
+
+{% block title %}Cable Editor · {{ rack }}{% endblock %}
+
+{% block head %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'nbcableeditor/artwork.css' %}?v={{ editor_version }}">
+  <link rel="stylesheet" href="{% static 'nbcableeditor/rack.css' %}?v={{ editor_version }}">
+{% endblock %}
+
+{% block javascript %}
+  {{ block.super }}
+  <script src="{% static 'nbcableeditor/rack-corridors.js' %}?v={{ editor_version }}" data-rack-routing-script defer></script>
+  <script src="{% static 'nbcableeditor/rack-routing.js' %}?v={{ editor_version }}" data-rack-routing-script defer></script>
+  <script src="{% static 'nbcableeditor/rack-rows.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-viewport.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-tooltip.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-cable-path.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-bundles.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-virtual-combine.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-export.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-print-labels.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-export-list.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-export-print.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-vlan-colors.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack.js' %}?v={{ editor_version }}" defer></script>
+{% endblock %}
+
+{% block content %}
+  <div class="re-rack" id="re-rack-editor" lang="en" data-cable-url="{{ cable_url }}" data-port-url="{{ port_url }}"
+       data-routing-worker-url="{% static 'nbcableeditor/rack-routing-worker.js' %}?v={{ editor_version }}">
+    {% csrf_token %}
+    <noscript><p class="alert alert-warning mt-3">Enable JavaScript to use Cable Editor.</p></noscript>
+    <div class="re-rack-workspace" data-workspace hidden>
+      <nav class="card re-rack-toolbar" aria-label="Cable Editor controls">
+        <div class="re-rack-toolbar-controls">
+          <h1 class="re-rack-toolbar-title">
+            <a href="{{ rack.get_absolute_url }}" title="Open rack in NetBox">{{ rack }} <i class="mdi mdi-open-in-new" aria-hidden="true"></i></a>
+          </h1>
+          <div class="re-rack-filter-controls">
+            <details class="re-rack-device-filter" data-device-filter>
+              <summary class="btn btn-outline-primary btn-sm re-rack-filter-summary" data-device-filter-summary>Devices: All</summary>
+              <div class="re-rack-filter-panel">
+                <p class="text-muted small mb-2">Choose the devices you want to see.</p>
+                <div class="re-rack-device-options" role="group" aria-label="Devices in this rack" data-device-options></div>
+                <button class="btn btn-outline-secondary btn-sm mt-2" type="button" data-device-reset hidden>Show all</button>
+              </div>
+            </details>
+            <span class="visually-hidden" role="status" data-device-filter-status></span>
+            <details data-port-row-filter hidden>
+              <summary class="btn btn-outline-primary btn-sm re-rack-filter-summary" data-port-row-summary>Port rows</summary>
+              <div class="re-rack-filter-panel re-rack-port-row-panel">
+                <p class="text-muted small mb-2">Choose which port rows to show in the rack elevations.</p>
+                <div class="re-rack-port-row-options" role="group" aria-label="Port rows by device and rack side"
+                     data-port-row-options></div>
+                <button class="btn btn-outline-secondary btn-sm mt-2" type="button" data-port-row-reset hidden>All rows</button>
+              </div>
+            </details>
+            <span class="visually-hidden" role="status" data-port-row-status></span>
+            <details data-view-options>
+              <summary class="btn btn-outline-primary btn-sm re-rack-filter-summary" data-view-summary>View</summary>
+              <div class="re-rack-filter-panel re-rack-view-options" role="group" aria-label="Rack view options">
+                <div class="re-rack-view-fields">
+                  <span id="re-rack-side-label">Rack side</span>
+                  <div class="btn-group re-rack-face-choices" role="group" aria-labelledby="re-rack-side-label">
+                    <button class="btn btn-outline-secondary btn-sm" type="button" data-rack-face-choice="front"
+                            aria-pressed="true" aria-controls="re-rack-face-front">Front</button>
+                    <button class="btn btn-outline-secondary btn-sm" type="button" data-rack-face-choice="rear"
+                            aria-pressed="false" aria-controls="re-rack-face-rear">Rear</button>
+                    <button class="btn btn-outline-secondary btn-sm" type="button" data-rack-face-choice="both"
+                            aria-pressed="false" aria-controls="re-rack-face-front re-rack-face-rear">Both</button>
+                  </div>
+                  <label for="re-rack-lines">Lines</label>
+                  <select class="form-select no-ts form-select-sm" id="re-rack-lines" data-lines>
+                    <option value="all">All</option>
+                    <option value="bundles">Bundles</option>
+                    <option value="selected">Selected only</option>
+                    <option value="none">Hidden</option>
+                  </select>
+                  <label for="re-rack-routing-strategy">Routing strategy</label>
+                  <select class="form-select no-ts form-select-sm" id="re-rack-routing-strategy"
+                          data-routing-strategy aria-describedby="re-rack-routing-help">
+                    <option value="balanced" selected>Balanced</option>
+                    <option value="pcb">PCB-style</option>
+                  </select>
+                  <p class="re-rack-view-help text-secondary" id="re-rack-routing-help">
+                    PCB-style uses wider lanes and rounded turns around devices.
+                  </p>
+                  <label for="re-rack-device-images">Device images</label>
+                  <select class="form-select no-ts form-select-sm" id="re-rack-device-images"
+                          data-device-images aria-keyshortcuts="I">
+                    <option value="visible">Visible</option>
+                    <option value="faded">50% opacity</option>
+                    <option value="hidden">Hidden</option>
+                  </select>
+                  <label for="re-rack-port-fill">Port fill</label>
+                  <select class="form-select no-ts form-select-sm" id="re-rack-port-fill"
+                          aria-describedby="re-rack-port-fill-help" data-port-fill>
+                    <option value="status">Connection status</option>
+                    <option value="vlan">Untagged VLAN</option>
+                  </select>
+                  <p class="re-rack-view-help text-secondary" id="re-rack-port-fill-help">
+                    In VLAN mode the port outline shows its connection status.
+                  </p>
+                  <button class="btn btn-outline-secondary btn-sm re-rack-vlan-color-configure" type="button"
+                          aria-haspopup="dialog" aria-controls="re-rack-vlan-color-dialog" data-vlan-color-settings>Configure VLAN colors…</button>
+                  <label for="re-rack-interface-highlight">Interfaces</label>
+                  <select class="form-select no-ts form-select-sm" id="re-rack-interface-highlight" data-interface-highlight>
+                    <option value="all">All</option>
+                    <option value="free">Highlight Free</option>
+                    <option value="used">Highlight Used</option>
+                  </select>
+                </div>
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" data-view-connections
+                         aria-controls="re-rack-connections-section" checked>
+                  <span class="form-check-label">Connections</span>
+                </label>
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" data-view-directory
+                         aria-controls="re-rack-directory-section" checked>
+                  <span class="form-check-label">Interface directory</span>
+                </label>
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" data-view-trim aria-controls="re-rack-board">
+                  <span class="form-check-label">Trim width to visible ports</span>
+                </label>
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" data-view-virtual-combine aria-controls="re-rack-board">
+                  <span class="form-check-label">Virtual combine <small class="text-secondary">(experimental)</small></span>
+                </label>
+                <div class="re-rack-port-legend" role="group" aria-label="Port status legend">
+                  <span class="re-rack-legend"><span class="re-rack-dot re-rack-dot-free"></span> Free</span>
+                  <span class="re-rack-legend"><span class="re-rack-dot re-rack-dot-connected"></span> Connected</span>
+                  <span class="re-rack-legend"><span class="re-rack-dot re-rack-dot-blocked"></span> Unavailable</span>
+                </div>
+                <div class="d-flex flex-wrap gap-1 mt-2">
+                  <button class="btn btn-outline-secondary btn-sm" type="button" data-view-reset-defaults>Use global defaults</button>
+                  {% if can_manage_editor_settings %}
+                    <a class="btn btn-outline-secondary btn-sm" href="{% url 'plugins:nbcableeditor:settings' %}">Plugin settings</a>
+                  {% endif %}
+                </div>
+              </div>
+            </details>
+            <button class="btn btn-outline-primary btn-sm" type="button"
+                    aria-label="Clear device cable focus" data-cable-focus-clear hidden></button>
+          </div>
+          <div class="btn-group re-rack-mode-buttons" role="group" aria-label="Cable editing mode">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-quick-mode="normal"
+                    aria-pressed="true">Normal</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-quick-mode="connect"
+                    aria-pressed="false" {% if not rack_data.canAdd %}disabled{% endif %}>Quick connect</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-quick-mode="unplug"
+                    aria-pressed="false" {% if not rack_data.canDelete %}disabled{% endif %}>Unplug</button>
+          </div>
+          <div class="re-rack-quick-actions">
+            <span class="badge bg-secondary-lt" data-quick-count hidden></span>
+            <button type="button" class="btn btn-primary btn-sm" data-quick-apply hidden>Apply batch</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-quick-clear hidden>Discard</button>
+          </div>
+          <div class="re-rack-vlan-filter" role="group" aria-label="Highlight by VLAN">
+            <label for="re-rack-vlan-query">VLAN</label>
+            <input class="form-control form-control-sm" id="re-rack-vlan-query" type="search" inputmode="numeric"
+                   placeholder="e.g. 50" autocomplete="off" data-vlan-query>
+            <label class="visually-hidden" for="re-rack-vlan-kind">VLAN membership</label>
+            <select class="form-select form-select-sm no-ts" id="re-rack-vlan-kind" data-vlan-kind>
+              <option value="any">Any</option>
+              <option value="tagged">Tagged</option>
+              <option value="untagged">Untagged</option>
+            </select>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-vlan-clear hidden>Clear</button>
+            <span class="re-rack-vlan-status" role="status" aria-live="polite" data-vlan-status></span>
+            <div class="re-rack-vlan-legend" role="group" aria-label="VLAN match legend" data-vlan-legend hidden>
+              <span class="re-rack-vlan-key" data-vlan-key="tagged">Tagged</span>
+              <span class="re-rack-vlan-key" data-vlan-key="untagged">Untagged</span>
+              <span class="re-rack-vlan-key" data-vlan-key="both">Both</span>
+            </div>
+          </div>
+          <div class="re-rack-toolbar-actions">
+            <div class="re-rack-zoom-control">
+              <label for="re-rack-zoom" class="small">Zoom</label>
+              <select class="form-select form-select-sm no-ts" id="re-rack-zoom" data-zoom>
+                <optgroup label="Fit to view">
+                  {% for value, label in rack_zoom_choices|slice:":3" %}
+                    <option value="{{ value }}">{{ label }}</option>
+                  {% endfor %}
+                </optgroup>
+                <optgroup label="Fixed zoom">
+                  {% for value, label in rack_zoom_choices|slice:"3:" %}
+                    <option value="{{ value }}">{{ label }}</option>
+                  {% endfor %}
+                </optgroup>
+                <option value="custom" hidden>Custom</option>
+              </select>
+            </div>
+            <div class="btn-group" role="group" aria-label="Cable change history">
+              <button type="button" class="btn btn-sm btn-outline-secondary re-rack-icon-button" data-history-undo
+                      aria-label="Undo" title="Undo" disabled><i class="mdi mdi-undo" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-secondary re-rack-icon-button" data-history-redo
+                      aria-label="Redo" title="Redo" disabled><i class="mdi mdi-redo" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-secondary re-rack-icon-button" data-history-open
+                      aria-label="History" title="History"><i class="mdi mdi-history" aria-hidden="true"></i></button>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-export-open aria-haspopup="dialog"
+                    aria-label="Export plan"><i class="mdi mdi-export-variant" aria-hidden="true"></i> Export</button>
+          </div>
+        </div>
+        <p class="re-rack-quick-status text-muted small mb-0" role="status" data-quick-status hidden></p>
+      </nav>
+      <section class="card re-rack-panel" aria-label="Rack elevations">
+        <div class="re-rack-bundle-panel" data-bundle-panel hidden>
+          <div class="re-rack-bundle-panel-heading">
+            <p class="re-rack-bundle-panel-label">Cable bundles</p>
+            <p class="re-rack-bundle-status" data-bundle-status role="status"></p>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-bundle-clear hidden>Show all bundles</button>
+          </div>
+          <div class="re-rack-bundle-groups" data-bundle-groups role="group" aria-label="Device pairs"></div>
+          <p class="re-rack-bundle-title" data-bundle-title hidden></p>
+          <div class="re-rack-bundle-cables" data-bundle-cables role="group" aria-label="Cables in selected bundle" hidden></div>
+        </div>
+        <div class="re-rack-scroll" data-scroll tabindex="0" aria-label="Scrollable rack elevations"
+             aria-description="Use the mouse wheel or pinch to zoom. Drag an empty area to pan.">
+          <div class="re-rack-board" id="re-rack-board" data-board data-rack-face="front">
+            <div class="re-rack-unit-column" role="group" aria-label="Rack units">
+              <h2 class="re-rack-face-heading" aria-hidden="true">U</h2>
+              <div class="re-rack-units" data-unit-elevation></div>
+            </div>
+            <section class="re-rack-face" id="re-rack-face-front" data-rack-face-panel="front"
+                     aria-label="Front rack elevation">
+              <h2 class="re-rack-face-heading">Front</h2>
+              <div class="re-rack-units" data-elevation="front"></div>
+            </section>
+            <div class="re-rack-gutter" data-gutter aria-hidden="true" hidden></div>
+            <section class="re-rack-face" id="re-rack-face-rear" data-rack-face-panel="rear"
+                     aria-label="Rear rack elevation" hidden>
+              <h2 class="re-rack-face-heading">Rear</h2>
+              <div class="re-rack-units" data-elevation="rear"></div>
+            </section>
+            <svg class="re-rack-wires" data-wires aria-hidden="true"></svg>
+          </div>
+        </div>
+      </section>
+
+      <aside class="card re-rack-panel re-rack-inspector" aria-label="Cable and interface controls" data-inspector>
+        <div class="re-rack-tooltip-dock" data-cable-tooltip-dock hidden></div>
+        <div class="re-rack-status">
+          <div data-status role="status" aria-live="polite"></div>
+          <div class="re-rack-actions">
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-cancel hidden>Cancel</button>
+          </div>
+        </div>
+        <div class="re-rack-inspector-scroll">
+          <details open class="re-rack-inspector-section" id="re-rack-connections-section" data-connections-section>
+            <summary>Connections <span class="badge bg-secondary-lt" data-cable-count></span></summary>
+            <div class="re-rack-inspector-inner">
+              <details class="re-rack-sidebar-fields">
+                <summary>Fields</summary>
+                <div class="re-rack-field-choices" role="group" aria-label="Connection fields">
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-connection-field="vlan" checked>
+                    <span class="form-check-label">VLANs</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-connection-field="type">
+                    <span class="form-check-label">Type</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-connection-field="status">
+                    <span class="form-check-label">Status</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-connection-field="description">
+                    <span class="form-check-label">Description</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-connection-field="length">
+                    <span class="form-check-label">Length</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-connection-field="profile">
+                    <span class="form-check-label">Profile</span>
+                  </label>
+                </div>
+              </details>
+              <div data-cable-detail hidden></div>
+              <div class="re-rack-cable-list" data-cable-list></div>
+            </div>
+          </details>
+          <details open class="re-rack-inspector-section" id="re-rack-directory-section" data-directory-section>
+            <summary>Interface directory</summary>
+            <div class="re-rack-inspector-inner">
+              <label class="visually-hidden" for="re-rack-search">Search devices or interfaces</label>
+              <input class="form-control form-control-sm" id="re-rack-search" type="search"
+                     placeholder="Search devices or interfaces" autocomplete="off" data-search>
+              <label class="form-check my-2">
+                <input class="form-check-input" type="checkbox" data-off-image>
+                <span class="form-check-label">Only ports outside the elevations</span>
+              </label>
+              <details class="re-rack-sidebar-fields">
+                <summary>Fields</summary>
+                <div class="re-rack-field-choices" role="group" aria-label="Interface directory fields">
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-directory-field="vlan" checked>
+                    <span class="form-check-label">VLANs</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-directory-field="peer-vlan">
+                    <span class="form-check-label">Peer VLANs</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-directory-field="label">
+                    <span class="form-check-label">Label</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-directory-field="type">
+                    <span class="form-check-label">Type</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-directory-field="description">
+                    <span class="form-check-label">Description</span>
+                  </label>
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" data-directory-field="status" checked>
+                    <span class="form-check-label">Status</span>
+                  </label>
+                </div>
+              </details>
+              <div data-directory></div>
+            </div>
+          </details>
+        </div>
+      </aside>
+    </div>
+    <svg class="re-rack-tooltip-guide" data-cable-tooltip-guide aria-hidden="true" focusable="false" hidden>
+      <path/>
+      <circle r="3"/>
+    </svg>
+    <div class="re-rack-tooltip" role="tooltip" data-cable-tooltip hidden></div>
+    <div class="re-rack-context-menu" role="menu" aria-label="Rack actions" tabindex="-1" data-context-menu hidden></div>
+
+    <dialog class="re-rack-dialog re-rack-vlan-color-dialog" id="re-rack-vlan-color-dialog" aria-labelledby="re-rack-vlan-color-title"
+            aria-describedby="re-rack-vlan-color-help" data-vlan-color-dialog>
+      <form class="re-rack-dialog-body" method="dialog" data-vlan-color-form>
+        <h2 class="re-rack-dialog-title" id="re-rack-vlan-color-title">Untagged VLAN colors</h2>
+        <p class="re-rack-dialog-summary" id="re-rack-vlan-color-help">
+          The first matching rule sets the port fill. Otherwise the VLAN's <code>editorColorHex</code> value applies,
+          followed by the optional fallback color. Ports without an untagged VLAN stay neutral.
+        </p>
+        <div class="re-rack-vlan-color-rules" data-vlan-color-rules></div>
+        <template data-vlan-color-rule-template>
+          <div class="re-rack-vlan-color-rule">
+            <label>VLAN IDs or ranges
+              <input class="form-control form-control-sm" type="text" placeholder="e.g. 10, 50-70"
+                     autocomplete="off" data-vlan-color-ids>
+            </label>
+            <label>Color
+              <input class="form-control form-control-sm re-rack-vlan-color-picker" type="color"
+                     value="#18a880" data-vlan-color-value>
+            </label>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-vlan-color-remove>Remove</button>
+          </div>
+        </template>
+        <button class="btn btn-outline-secondary btn-sm re-rack-vlan-color-add" type="button" data-vlan-color-add>Add color rule</button>
+        <div class="re-rack-vlan-color-fallback">
+          <label class="form-check">
+            <input class="form-check-input" type="checkbox" data-vlan-color-fallback-enabled>
+            <span class="form-check-label">Fallback for other untagged VLANs</span>
+          </label>
+          <input class="form-control form-control-sm re-rack-vlan-color-picker" type="color"
+                 aria-label="Fallback color" value="#d34848" data-vlan-color-fallback disabled>
+        </div>
+        <p class="re-rack-dialog-error" role="alert" data-vlan-color-error hidden></p>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-secondary" type="button" data-vlan-color-cancel>Cancel</button>
+          <button class="btn btn-primary" type="submit">Apply colors</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="re-rack-dialog re-rack-export-dialog" data-export-dialog aria-labelledby="re-rack-export-title">
+      <form class="re-rack-dialog-body" method="dialog" data-export-form>
+        <h2 class="re-rack-dialog-title" id="re-rack-export-title">Export rack plan</h2>
+        <p class="re-rack-dialog-summary">Uses the current rack sides, devices and cable display.</p>
+        <label class="form-label mb-0" for="re-rack-export-format">Output</label>
+        <select class="form-select no-ts" id="re-rack-export-format" data-export-format autofocus>
+          <option value="pdf">Print / Save as PDF</option>
+          <option value="png">PNG image</option>
+        </select>
+        <div class="re-rack-export-options" data-export-print-options>
+          <div>
+            <label class="form-label" for="re-rack-export-paper">Paper size</label>
+            <select class="form-select no-ts" id="re-rack-export-paper" data-export-paper>
+              <option value="a5">A5</option>
+              <option value="a4" selected>A4</option>
+              <option value="a3">A3</option>
+              <option value="letter">Letter</option>
+              <option value="legal">Legal</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label" for="re-rack-export-orientation">Orientation</label>
+            <select class="form-select no-ts" id="re-rack-export-orientation" data-export-orientation>
+              <option value="portrait">Portrait</option>
+              <option value="landscape" selected>Landscape</option>
+            </select>
+          </div>
+          <label class="form-check re-rack-export-wide">
+            <input type="checkbox" class="form-check-input" data-export-cables checked
+                   aria-describedby="re-rack-export-count">
+            <span class="form-check-label">Include cable list</span>
+            <small class="d-block text-muted" id="re-rack-export-count" data-export-count></small>
+          </label>
+          <p class="re-rack-dialog-summary re-rack-export-wide">The print layout separates cable runs. With the list included, cable numbers link the plan to its rows.</p>
+          <p class="re-rack-dialog-summary re-rack-export-wide">Choose your printer or <strong>Save as PDF</strong> in the print dialog.</p>
+        </div>
+        <div class="re-rack-export-options" data-export-image-options hidden>
+          <div>
+            <label class="form-label" for="re-rack-export-resolution">Longest side</label>
+            <select class="form-select no-ts" id="re-rack-export-resolution" data-export-resolution>
+              <option value="1600">1600 px</option>
+              <option value="2400" selected>2400 px</option>
+              <option value="3600">3600 px</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div data-export-custom-field hidden>
+            <label class="form-label" for="re-rack-export-custom">Pixels</label>
+            <input class="form-control" id="re-rack-export-custom" data-export-custom type="number"
+                   min="320" max="6000" step="1" value="2400" required disabled>
+          </div>
+          <output class="re-rack-dialog-summary re-rack-export-wide" data-export-dimensions></output>
+        </div>
+        <p class="re-rack-dialog-error" role="alert" data-export-error hidden></p>
+        <div class="re-rack-dialog-actions">
+          <button type="button" class="btn btn-outline-secondary" data-export-cancel>Cancel</button>
+          <button type="submit" class="btn btn-primary" data-export-submit>Print / Save as PDF</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="re-rack-dialog" data-cable-create
+            aria-labelledby="re-rack-create-title" aria-describedby="re-rack-create-summary">
+      <form class="re-rack-dialog-body" method="dialog" data-create-form>
+        <h2 class="re-rack-dialog-title" id="re-rack-create-title">Connect ports</h2>
+        <p class="re-rack-dialog-summary" id="re-rack-create-summary" data-create-summary></p>
+        <label class="form-label mb-0" for="re-rack-cable-type">Cable type</label>
+        <select class="form-select no-ts" id="re-rack-cable-type" name="type">
+          <option value="">Not specified</option>
+        </select>
+        <div class="re-rack-edit-fields">
+          <div class="re-rack-edit-field">
+            <label class="form-label mb-0" for="re-rack-cable-length">Cable length</label>
+            <input class="form-control" id="re-rack-cable-length" type="number" name="length"
+                   min="0" max="999999.99" step="0.01" inputmode="decimal" placeholder="Optional">
+          </div>
+          <div class="re-rack-edit-field">
+            <label class="form-label mb-0" for="re-rack-cable-length-unit">Unit</label>
+            <select class="form-select no-ts" id="re-rack-cable-length-unit" name="length_unit"></select>
+          </div>
+        </div>
+        <label class="form-label mb-0" for="re-rack-cable-label">Label <span class="text-muted">(optional)</span></label>
+        <input class="form-control" type="text" id="re-rack-cable-label" name="label" maxlength="100">
+        <label class="form-label mb-0" for="re-rack-cable-color">Color <span class="text-muted">(optional)</span></label>
+        <input class="form-control" type="text" id="re-rack-cable-color" name="color" maxlength="7"
+               pattern="#?[0-9A-Fa-f]{6}" title="Enter a six-digit hexadecimal color, for example #2563EB."
+               placeholder="#2563EB" spellcheck="false" autocapitalize="off" autocomplete="off">
+        <div class="re-rack-palette" role="group" aria-label="Cable colors">
+          {% for name, color in cable_color_palette %}
+            <button class="re-rack-palette-swatch" type="button" data-color-value="{{ color }}"
+                    style="--re-cable-swatch: {{ color }}" aria-label="{{ name }}" title="{{ name }}"></button>
+          {% endfor %}
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-color-value="">No color</button>
+        </div>
+        <p class="re-rack-dialog-error" role="alert" data-create-error hidden></p>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-secondary" type="button" data-create-cancel>Cancel</button>
+          <button class="btn btn-primary" type="submit" autofocus>Create cable</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="re-rack-dialog re-rack-edit-dialog" data-cable-edit
+            aria-labelledby="re-rack-edit-title" aria-describedby="re-rack-edit-endpoints">
+      <form class="re-rack-dialog-body" method="dialog" data-edit-form>
+        <h2 class="re-rack-dialog-title" id="re-rack-edit-title">Edit cable</h2>
+        <div class="re-rack-dialog-summary" id="re-rack-edit-endpoints" data-edit-endpoints></div>
+        <div class="re-rack-edit-fields">
+          <div class="re-rack-edit-field re-rack-edit-wide">
+            <label class="form-label mb-0" for="re-rack-edit-label">Label <span class="text-muted">(optional)</span></label>
+            <input class="form-control form-control-sm" id="re-rack-edit-label" type="text" name="label" maxlength="100" autofocus>
+          </div>
+          <div class="re-rack-edit-field">
+            <label class="form-label mb-0" for="re-rack-edit-type">Cable type</label>
+            <select class="form-select form-select-sm no-ts" id="re-rack-edit-type" name="type">
+              <option value="">Not specified</option>
+            </select>
+          </div>
+          <div class="re-rack-edit-field">
+            <label class="form-label mb-0" for="re-rack-edit-status">Status</label>
+            <select class="form-select form-select-sm no-ts" id="re-rack-edit-status" name="status" required>
+              <option value="">Select a status</option>
+            </select>
+          </div>
+          <div class="re-rack-edit-field">
+            <label class="form-label mb-0" for="re-rack-edit-length">Cable length</label>
+            <input class="form-control form-control-sm" id="re-rack-edit-length" type="number" name="length"
+                   min="0" max="999999.99" step="0.01" inputmode="decimal" placeholder="Optional">
+          </div>
+          <div class="re-rack-edit-field">
+            <label class="form-label mb-0" for="re-rack-edit-length-unit">Unit</label>
+            <select class="form-select form-select-sm no-ts" id="re-rack-edit-length-unit" name="length_unit"></select>
+          </div>
+          <div class="re-rack-edit-field re-rack-edit-wide">
+            <label class="form-label mb-0" for="re-rack-edit-description">Description <span class="text-muted">(optional)</span></label>
+            <input class="form-control form-control-sm" id="re-rack-edit-description" type="text" name="description" maxlength="200">
+          </div>
+          <div class="re-rack-edit-field re-rack-edit-wide">
+            <label class="form-label mb-0" for="re-rack-edit-color">Color <span class="text-muted">(optional)</span></label>
+            <input class="form-control form-control-sm" id="re-rack-edit-color" type="text" name="color" maxlength="7"
+                   pattern="#?[0-9A-Fa-f]{6}" title="Enter a six-digit hexadecimal color, for example #2563EB."
+                   placeholder="#2563EB" spellcheck="false" autocapitalize="off" autocomplete="off">
+          </div>
+        </div>
+        <div class="re-rack-palette" role="group" aria-label="Cable colors">
+          {% for name, color in cable_color_palette %}
+            <button class="re-rack-palette-swatch" type="button" data-color-value="{{ color }}"
+                    style="--re-cable-swatch: {{ color }}" aria-label="{{ name }}" title="{{ name }}"></button>
+          {% endfor %}
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-color-value="">No color</button>
+        </div>
+        <p class="re-rack-dialog-error" role="alert" data-edit-error hidden></p>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-secondary btn-sm" type="button" data-edit-close>Cancel</button>
+          <button class="btn btn-primary btn-sm" type="submit" data-edit-submit>Save changes</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="re-rack-dialog re-rack-move-dialog" data-cable-move
+            aria-labelledby="re-rack-move-title" aria-describedby="re-rack-move-summary">
+      <form class="re-rack-dialog-body" method="dialog" data-move-form>
+        <h2 class="re-rack-dialog-title" id="re-rack-move-title">Move cable end</h2>
+        <p class="re-rack-dialog-summary" id="re-rack-move-summary" data-move-summary></p>
+        <p class="re-rack-dialog-error" role="alert" data-move-error hidden></p>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-secondary btn-sm" type="button" data-move-cancel>Cancel</button>
+          <button class="btn btn-primary btn-sm" type="submit" autofocus>Move cable end</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="re-rack-dialog re-rack-details-dialog" data-cable-modal aria-labelledby="re-rack-cable-title">
+      <div class="re-rack-dialog-body">
+        <h2 class="re-rack-dialog-title" id="re-rack-cable-title">Cable details</h2>
+        <div class="re-rack-dialog-details" data-modal-content></div>
+        <p class="re-rack-dialog-error" role="alert" data-modal-error hidden></p>
+        <div class="re-rack-delete-confirm" data-modal-delete-confirm hidden>
+          <p class="mb-2">Remove this cable from NetBox and disconnect both endpoints?</p>
+          <div class="re-rack-dialog-actions">
+            <button class="btn btn-outline-secondary" type="button" data-modal-delete-cancel>Keep cable</button>
+            <button class="btn btn-danger" type="button" data-modal-delete-yes>Remove cable</button>
+          </div>
+        </div>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-danger me-auto" type="button" data-modal-delete hidden>Remove cable…</button>
+          <button class="btn btn-outline-secondary" type="button" data-modal-close autofocus>Close</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog class="re-rack-dialog re-rack-port-dialog" data-port-dialog aria-labelledby="re-rack-port-title">
+      <div class="re-rack-dialog-body">
+        <h2 class="re-rack-dialog-title" id="re-rack-port-title">Port details</h2>
+        <div class="re-rack-dialog-details" data-port-dialog-content></div>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-secondary btn-sm" type="button" data-port-modal-close autofocus>Close</button>
+        </div>
+      </div>
+    </dialog>
+    <template data-cable-inline-template>
+      <form class="re-rack-inline-form" data-inline-form autocomplete="off" novalidate>
+        <div class="re-rack-inline-heading">
+          <h3>Cable properties</h3>
+          <span class="re-rack-inline-status" role="status" data-inline-status></span>
+        </div>
+        <p class="re-rack-inline-hint">Changes save when you leave a field. Press Ctrl+Enter to save comments.</p>
+        <div class="re-rack-inline-fields">
+          <div class="re-rack-edit-field">
+            <label class="form-label mb-0" for="re-rack-inline-cable-label">Label</label>
+            <input class="form-control form-control-sm" id="re-rack-inline-cable-label" type="text" name="label" maxlength="100">
+          </div>
+          <div class="re-rack-edit-field">
+            <label class="form-label mb-0" for="re-rack-inline-cable-length">Length</label>
+            <div class="re-rack-inline-length" data-inline-length>
+              <input class="form-control form-control-sm" id="re-rack-inline-cable-length" type="number" name="length"
+                     min="0" max="999999.99" step="0.01" inputmode="decimal">
+              <select class="form-select form-select-sm no-ts" name="length_unit" aria-label="Length unit"></select>
+            </div>
+          </div>
+          <div class="re-rack-edit-field re-rack-edit-wide">
+            <label class="form-label mb-0" for="re-rack-inline-cable-description">Description</label>
+            <input class="form-control form-control-sm" id="re-rack-inline-cable-description" type="text" name="description" maxlength="200">
+          </div>
+          <div class="re-rack-edit-field re-rack-edit-wide">
+            <label class="form-label mb-0" for="re-rack-inline-cable-color">Color</label>
+            <div class="re-rack-inline-color">
+              <input class="form-control form-control-sm" id="re-rack-inline-cable-color" type="text" name="color" maxlength="7"
+                     pattern="#?[0-9A-Fa-f]{6}" title="Enter a six-digit hexadecimal color, for example #2563EB."
+                     placeholder="#2563EB" spellcheck="false" autocapitalize="off">
+              <input class="form-control form-control-color form-control-sm" type="color" data-inline-color-picker aria-label="Choose custom cable color">
+              <div class="re-rack-palette re-rack-inline-palette" role="group" aria-label="Cable color presets">
+                {% for name, color in cable_color_palette %}
+                  <button class="re-rack-palette-swatch" type="button" data-inline-color-choice="{{ color }}"
+                          style="--re-cable-swatch: {{ color }}" aria-label="{{ name }}" title="{{ name }}"></button>
+                {% endfor %}
+                <button class="btn btn-sm btn-outline-secondary" type="button" data-inline-color-choice="">Clear color</button>
+              </div>
+            </div>
+          </div>
+          <div class="re-rack-edit-field re-rack-edit-wide" data-inline-tags>
+            <label class="form-label mb-0" for="re-rack-inline-cable-tag">Tags</label>
+            <div class="re-rack-inline-tags">
+              <div class="re-rack-inline-tag-list" data-inline-tag-list></div>
+              <select class="form-select form-select-sm no-ts" id="re-rack-inline-cable-tag" data-inline-tag-select>
+                <option value="">Add a tag…</option>
+              </select>
+            </div>
+          </div>
+          <div class="re-rack-edit-field re-rack-edit-wide">
+            <label class="form-label mb-0" for="re-rack-inline-cable-comments">Comments</label>
+            <textarea class="form-control form-control-sm" id="re-rack-inline-cable-comments" name="comments" rows="3"></textarea>
+          </div>
+        </div>
+        <div class="re-rack-inline-feedback">
+          <p class="re-rack-dialog-error" role="alert" data-inline-error hidden></p>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-inline-retry hidden>Retry</button>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-inline-discard hidden>Discard unsaved changes</button>
+        </div>
+      </form>
+    </template>
+    <template data-port-inline-template>
+      <form class="re-rack-inline-form" data-inline-form autocomplete="off" novalidate>
+        <div class="re-rack-inline-heading">
+          <h3>Port properties</h3>
+          <span class="re-rack-inline-status" role="status" data-inline-status></span>
+        </div>
+        <p class="re-rack-inline-hint">Changes save when you leave a field.</p>
+        <div class="re-rack-inline-fields">
+          <div class="re-rack-edit-field re-rack-edit-wide">
+            <label class="form-label mb-0" for="re-rack-inline-port-label">Label</label>
+            <input class="form-control form-control-sm" id="re-rack-inline-port-label" type="text" name="label" maxlength="64">
+          </div>
+          <div class="re-rack-edit-field re-rack-edit-wide" data-inline-tags>
+            <label class="form-label mb-0" for="re-rack-inline-port-tag">Tags</label>
+            <div class="re-rack-inline-tags">
+              <div class="re-rack-inline-tag-list" data-inline-tag-list></div>
+              <select class="form-select form-select-sm no-ts" id="re-rack-inline-port-tag" data-inline-tag-select>
+                <option value="">Add a tag…</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="re-rack-inline-feedback">
+          <p class="re-rack-dialog-error" role="alert" data-inline-error hidden></p>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-inline-retry hidden>Retry</button>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-inline-discard hidden>Discard unsaved changes</button>
+        </div>
+      </form>
+    </template>
+    <dialog class="re-rack-dialog re-rack-history-dialog" data-history-dialog aria-labelledby="re-rack-history-title">
+      <div class="re-rack-dialog-body">
+        <h2 class="re-rack-dialog-title" id="re-rack-history-title">Cable history</h2>
+        <p class="re-rack-dialog-summary">Choose a checkpoint to undo or redo the changes between it and the current state.</p>
+        <div class="re-rack-history-list" data-history-list></div>
+        <p class="re-rack-dialog-error" role="alert" data-history-error hidden></p>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-secondary" type="button" data-history-close autofocus>Close</button>
+        </div>
+      </div>
+    </dialog>
+  </div>
+  {{ rack_data|json_script:"re-rack-data" }}
+{% endblock %}

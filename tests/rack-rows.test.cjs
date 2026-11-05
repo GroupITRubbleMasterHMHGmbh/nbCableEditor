@@ -1,9 +1,9 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-require("../netbox_rack_editor/static/netbox_rack_editor/rack-rows.js");
+require("../nbcableeditor/static/nbcableeditor/rack-rows.js");
 
-const {group} = globalThis.NetBoxRackRows;
+const {group} = globalThis.NbCableEditorRows;
 
 test("groups uneven port placements into top-down rows and orders each row left to right", () => {
   const ports = [

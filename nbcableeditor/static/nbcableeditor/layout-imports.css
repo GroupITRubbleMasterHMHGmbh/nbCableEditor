@@ -1,0 +1,32 @@
+.nre-template-overview input[type="search"] {
+  width: min(20rem, 76vw);
+}
+
+.nre-template-overview-preview {
+  display: grid;
+  align-items: center;
+  min-height: 8.75rem;
+  padding: .75rem;
+  border: 1px solid var(--tblr-border-color, #dce1e7);
+  border-radius: var(--tblr-border-radius, .375rem);
+  background: var(--tblr-bg-surface-secondary, #f6f8fb);
+}
+
+.nre-template-overview-faces {
+  display: grid;
+  gap: .65rem;
+}
+
+.nre-template-overview-faces[hidden] {
+  display: none;
+}
+
+.nre-template-overview-faces svg {
+  display: block;
+  width: 100%;
+  min-height: 1.75rem;
+}
+
+.nre-template-overview select {
+  min-width: 0;
+}

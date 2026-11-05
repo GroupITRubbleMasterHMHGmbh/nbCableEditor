@@ -1,0 +1,110 @@
+{% extends 'base/layout.html' %}
+{% load static %}
+
+{% block title %}Cable Editor · Device Type layout templates{% endblock %}
+
+{% block head %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'nbcableeditor/layout-imports.css' %}?v={{ editor_version }}">
+{% endblock %}
+
+{% block content %}
+  <div class="nre-template-overview" data-template-overview lang="en">
+    <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+      <div>
+        <h1 class="mb-1">Device Type layout templates</h1>
+        <p class="text-secondary mb-0">Choose a built-in drawing for a Device Type, then review its port and module bay mappings in the Layout Designer.</p>
+      </div>
+      <a class="btn btn-outline-secondary" href="{% url 'dcim:devicetype_list' %}">NetBox Device Types</a>
+    </div>
+
+    <form method="get" class="d-flex flex-wrap align-items-end gap-2 mb-4" role="search" aria-label="Search Device Types">
+      <label for="nre-template-search" class="form-label mb-0">Find a Device Type
+        <input id="nre-template-search" type="search" class="form-control mt-1" name="q" value="{{ search }}"
+               placeholder="Model, part number or manufacturer" maxlength="120">
+      </label>
+      <button type="submit" class="btn btn-primary">Search</button>
+      {% if search %}<a href="{% url 'plugins:nbcableeditor:layout-imports' %}" class="btn btn-outline-secondary">Clear</a>{% endif %}
+      <span class="text-secondary align-self-center">{{ page.paginator.count }} Device Type{{ page.paginator.count|pluralize }}</span>
+    </form>
+
+    <div class="alert alert-info mb-4" role="note">
+      Suggestions use the NetBox part number or model name. Choose a different drawing as needed.
+      Review mapping opens the designer. Apply the drawing there and select Save layout to store it.
+    </div>
+
+    <div class="row row-cards">
+      {% for card in cards %}
+        <div class="col-12 col-lg-6 col-xxl-4">
+          <article class="card h-100" data-template-device="{{ card.device.pk }}">
+            <div class="card-header align-items-start justify-content-between gap-2">
+              <div>
+                <h2 class="card-title mb-1">
+                  <a href="{{ card.device.get_absolute_url }}">{{ card.device.model }}</a>
+                </h2>
+                <p class="text-secondary small mb-0">
+                  {{ card.device.manufacturer }}{% if card.device.part_number %} · {{ card.device.part_number }}{% endif %}
+                </p>
+              </div>
+              {% if card.device.saved_layout %}
+                <span class="badge bg-green-lt">Layout saved</span>
+              {% else %}
+                <span class="badge bg-secondary-lt">No saved layout</span>
+              {% endif %}
+            </div>
+            <div class="card-body d-flex flex-column gap-3">
+              <div class="nre-template-overview-preview" data-template-preview
+                   {% if card.suggestion %}data-preview-url="{% static card.suggestion.static_path %}?v={{ editor_version }}"{% endif %}>
+                <p class="text-secondary small mb-0" data-preview-status>
+                  {% if card.suggestion %}Loading drawing preview…{% else %}Select a template to see its drawing.{% endif %}
+                </p>
+                <div class="nre-template-overview-faces" data-preview-faces hidden></div>
+              </div>
+              <p class="small text-secondary mb-0" data-template-match>{{ card.reason }}</p>
+              {% if card.device.can_import %}
+                <form class="d-flex flex-wrap align-items-end gap-2 mt-auto" action="{{ card.editor_url }}" method="get">
+                  <label class="form-label flex-grow-1 mb-0" for="nre-template-choice-{{ card.device.pk }}">Built-in drawing
+                    <select id="nre-template-choice-{{ card.device.pk }}" name="template" class="form-select no-ts mt-1"
+                            data-overview-template-choice required>
+                      <option value="">Select a template</option>
+                      {% for template in templates %}
+                        <option value="{{ template.slug }}" data-preview-url="{% static template.static_path %}?v={{ editor_version }}"
+                                {% if template == card.suggestion %}selected{% endif %}>{{ template.name }}{% if template.part_number %} · {{ template.part_number }}{% endif %}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <button type="submit" class="btn btn-primary">Review mapping</button>
+                </form>
+              {% else %}
+                <p class="small text-secondary mb-0">You can view this Device Type layout.</p>
+                <div class="mt-auto"><a class="btn btn-outline-secondary" href="{{ card.editor_url }}">Open layout</a></div>
+              {% endif %}
+            </div>
+          </article>
+        </div>
+      {% empty %}
+        <div class="col-12">
+          <div class="card"><div class="card-body text-secondary">No Device Types match your search.</div></div>
+        </div>
+      {% endfor %}
+    </div>
+
+    {% if page.has_other_pages %}
+      <nav class="d-flex align-items-center gap-3 mt-4" aria-label="Device Type pages">
+        {% if page.has_previous %}
+          <a class="btn btn-outline-secondary" href="?q={{ search|urlencode }}&amp;page={{ page.previous_page_number }}">Previous</a>
+        {% endif %}
+        <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+        {% if page.has_next %}
+          <a class="btn btn-outline-secondary" href="?q={{ search|urlencode }}&amp;page={{ page.next_page_number }}">Next</a>
+        {% endif %}
+      </nav>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block javascript %}
+  {{ block.super }}
+  <script src="{% static 'nbcableeditor/layout-template.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/layout-imports.js' %}?v={{ editor_version }}" defer></script>
+{% endblock %}

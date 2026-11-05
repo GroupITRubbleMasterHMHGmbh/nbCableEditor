@@ -1,11 +1,11 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-require("../netbox_rack_editor/static/netbox_rack_editor/rack-virtual-combine.js");
-require("../netbox_rack_editor/static/netbox_rack_editor/rack-cable-path.js");
+require("../nbcableeditor/static/nbcableeditor/rack-virtual-combine.js");
+require("../nbcableeditor/static/nbcableeditor/rack-cable-path.js");
 
-const {findRuns, planTubes} = globalThis.NetBoxRackVirtualCombine;
-const {roundPath} = globalThis.NetBoxRackCablePath;
+const {findRuns, planTubes} = globalThis.NbCableEditorVirtualCombine;
+const {roundPath} = globalThis.NbCableEditorCablePath;
 const cable = (id, a, b) => ({id, a: {port: a}, b: {port: b}});
 
 test("combines only consecutive ports from the same two rows in matching order", () => {
@@ -219,6 +219,20 @@ test("moves a tube away from a parallel foreign cable", () => {
   const tube = assertCompactTube(planTubes(connections, rows, routes, {...options, foreignStrokeWidth: 4}), connections);
   assert.equal(tube.parallelGap, 25);
   assert.ok(Math.abs(tube.x - foreignX) - tube.width / 2 >= 25 + 2 + 1);
+});
+
+test("custom tube settings increase the painted clearance at caps and parallel sides", () => {
+  const {connections, rows, routes, options} = fixture();
+  const foreignRoutes = new Map(routes);
+  const custom = {...options, foreignRoutes, foreignStrokeWidth: 4, tubeGap: 21, tubeParallelGap: 34};
+  foreignRoutes.set(99, [{x: 0, y: 160}, {x: 346, y: 160}]);
+  const crossing = assertCompactTube(planTubes(connections, rows, routes, custom), connections);
+  assert.ok(crossing.bottom <= 160 - 24 || crossing.top >= 160 + 24);
+
+  foreignRoutes.set(99, [{x: 174, y: 0}, {x: 174, y: 300}]);
+  const parallel = assertCompactTube(planTubes(connections, rows, routes, custom), connections);
+  assert.equal(parallel.parallelGap, 34);
+  assert.ok(Math.abs(parallel.x - 174) - parallel.width / 2 >= 37);
 });
 
 function horizontalFixture(sideBySide = true) {
