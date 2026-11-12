@@ -2,7 +2,7 @@
 
 nbCableEditor lets you design device faces and manage rack cabling directly in NetBox. Place ports on device images or custom drawings, connect and move cables in the rack view, and trace links through patch panels to wall outlets and endpoints.
 
-Version **0.10.63** supports **NetBox 4.5.10 and later 4.5 releases** and requires **Python 3.12 or later** in the NetBox environment.
+Version **0.10.65** supports **NetBox 4.5.10 and later 4.5 releases** and requires **Python 3.12 or later** in the NetBox environment.
 
 - [User guide](docs/user-guide.md)
 - [Installation, upgrades, and permissions](docs/installation.md)

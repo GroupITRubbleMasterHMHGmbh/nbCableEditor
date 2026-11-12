@@ -11,8 +11,9 @@
 
 {% block javascript %}
   {{ block.super }}
-  <script src="{% static 'nbcableeditor/rack-corridors.js' %}?v={{ editor_version }}" data-rack-routing-script defer></script>
-  <script src="{% static 'nbcableeditor/rack-routing.js' %}?v={{ editor_version }}" data-rack-routing-script defer></script>
+  <script src="{% static 'nbcableeditor/http-url.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-corridors.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-routing.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-rows.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-viewport.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-tooltip.js' %}?v={{ editor_version }}" defer></script>

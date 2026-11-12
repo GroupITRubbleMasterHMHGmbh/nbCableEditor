@@ -11,10 +11,11 @@ from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
 from extras.models import CustomField
 
 from .calculator_settings import calculator_settings_context, update_calculator_settings
+from .layout_placeholders import object_name
 from .models import CableEditorSettings
 
 
-SETTINGS_PERMISSION = "nbcableeditor.change_cableeditorsettings"
+SETTINGS_PERMISSION = CableEditorSettings.CHANGE_PERMISSION
 SETTINGS_ROUTE = "plugins:nbcableeditor:settings"
 
 ZOOM_CHOICES = (
@@ -195,7 +196,7 @@ def cable_custom_values(user, cables, fields):
             model = field.related_object_type.model_class() if field.related_object_type else None
             manager = getattr(model, "objects", None)
             readable = (
-                {obj.pk: str(obj) for obj in manager.restrict(user).filter(pk__in=ids)}
+                {obj.pk: object_name(obj) for obj in manager.restrict(user).filter(pk__in=ids)}
                 if ids and hasattr(manager, "restrict") else {}
             )
             for pk, group in references.items():
@@ -233,8 +234,7 @@ def editor_settings(request):
     if form.is_bound and form.is_valid():
         with transaction.atomic():
             settings, _ = CableEditorSettings.objects.select_for_update().get_or_create(pk=1)
-            settings.options = {**settings.options, **form.options()}
-            settings.save(update_fields=["options"])
+            settings.save_options(request.user, {**settings.options, **form.options()})
         messages.success(request, "Cable Editor settings saved.")
         return redirect(SETTINGS_ROUTE)
     return render(request, "nbcableeditor/settings.html", {

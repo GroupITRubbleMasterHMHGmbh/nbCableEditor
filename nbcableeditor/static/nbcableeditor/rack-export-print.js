@@ -40,6 +40,7 @@
     printFrame.name = "rack-export-print";
     printFrame.title = "Printable rack plan";
     printFrame.tabIndex = -1;
+    printFrame.setAttribute("sandbox", "allow-same-origin allow-modals");
     printFrame.style.cssText = "position:fixed;left:-10000px;top:0;border:0;width:" +
       width + "mm;height:" + height + "mm";
     printFrame.srcdoc = '<!doctype html><html lang="en"><head><meta charset="utf-8"></head><body></body></html>';

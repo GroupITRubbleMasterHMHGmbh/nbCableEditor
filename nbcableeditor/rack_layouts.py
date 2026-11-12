@@ -20,7 +20,6 @@ def _resolved_name(name, positions):
 
 def rack_layouts(user, devices, visible_types, port_types, load_designs, load_module_images):
     device_ids = {device.pk for device in devices}
-    type_ids = {device.device_type_id for device in devices}
     bays = {
         (bay.device_id, bay.module_id, bay.name): bay
         for bay in ModuleBay.objects.restrict(user).filter(device_id__in=device_ids)
@@ -54,11 +53,12 @@ def rack_layouts(user, devices, visible_types, port_types, load_designs, load_mo
 
     device_ports = {}
     module_templates = defaultdict(list)
-    for kind, (_, field, _) in port_types.items():
+    for kind, (model, field, _) in port_types.items():
         relation = field.removesuffix("_id")
-        placements = PortPlacement.objects.filter(
-            _owner_filter(relation, type_ids, visible_module_types)
-        ).select_related(relation)
+        templates = model.objects.restrict(user).filter(
+            Q(device_type_id__in=visible_types) | Q(module_type_id__in=visible_module_types)
+        ).values("pk")
+        placements = PortPlacement.objects.filter(**{f"{field}__in": templates}).select_related(relation)
         for placement in placements:
             template = getattr(placement, relation)
             if template.device_type_id is not None:
@@ -124,12 +124,6 @@ def rack_layouts(user, devices, visible_types, port_types, load_designs, load_mo
                 face: project(layout, face, face, (0, 0, 1, 1)) for face in sides
             }
     return device_ports, module_ports, artwork
-
-
-def _owner_filter(relation, device_types, module_types):
-    return Q(**{f"{relation}__device_type_id__in": device_types}) | Q(
-        **{f"{relation}__module_type_id__in": module_types},
-    )
 
 
 def _port_point(placement):

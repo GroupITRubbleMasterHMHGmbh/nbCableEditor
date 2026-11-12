@@ -28,7 +28,7 @@
 
   function imageData(url) {
     if (url.startsWith("data:")) return Promise.resolve(url);
-    return fetch(url).then(response => {
+    return fetch(url, {referrerPolicy: "no-referrer"}).then(response => {
       if (!response.ok) throw new Error("Device image request failed.");
       return response.blob();
     }).then(blob => new Promise((resolve, reject) => {

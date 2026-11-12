@@ -7,6 +7,7 @@ from dcim.models import Cable, Rack, Site
 from utilities.testing import TestCase
 
 from nbcableeditor.cable_history import (
+    MAX_ATOMIC_CABLE_CHANGES,
     HistoryConflictError,
     history_for_rack,
     history_payload,
@@ -117,3 +118,27 @@ class CableHistoryTestCase(TestCase):
         self.assertEqual(history_for_rack(self.other_user, self.rack.pk), empty)
         self.assertEqual(history_for_rack(self.user, self.other_rack.pk), empty)
         self.assertEqual(CableHistoryJournal.objects.count(), 1)
+
+    def test_large_jump_is_atomic_and_one_full_plan_remains_undoable(self):
+        before = {"name": "Original"}
+        after = {"name": "Changed"}
+        changes = [{"before": before, "after": after}]
+
+        def apply_change(_expected, target):
+            Rack.objects.using(self.db).filter(pk=self.rack.pk).update(name=target["name"])
+
+        with transaction.atomic(using=self.db):
+            journal = lock_history(self.db, self.user, self.rack.pk)
+            record_history(self.db, journal, changes * MAX_ATOMIC_CABLE_CHANGES, "Full plan", atomic_plan=True)
+            record_history(self.db, journal, changes, "Single edit")
+
+            with self.assertRaisesMessage(HistoryConflictError, "Choose a closer checkpoint"):
+                jump_history(self.db, journal, 0, 2, apply_change, apply_plan=lambda _: self.fail("Over the limit"))
+            self.assertEqual(Rack.objects.get(pk=self.rack.pk).name, self.rack.name)
+            self.assertEqual((journal.cursor, journal.revision), (2, 2))
+
+            jump_history(self.db, journal, 1, 2, apply_change)
+            replayed = []
+            jump_history(self.db, journal, 0, 3, apply_change, apply_plan=replayed.extend)
+            self.assertEqual(len(replayed), MAX_ATOMIC_CABLE_CHANGES)
+            self.assertEqual((journal.cursor, journal.revision), (0, 4))

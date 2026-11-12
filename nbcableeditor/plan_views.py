@@ -6,7 +6,7 @@ from functools import wraps
 from core.signals import clear_events
 from dcim.choices import LinkStatusChoices
 from dcim.models import Cable, Rack
-from django.core.exceptions import RequestDataTooBig, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, OperationalError, router, transaction
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
@@ -18,15 +18,12 @@ from django.views.decorators.http import require_GET, require_http_methods
 from utilities.conversion import to_meters
 from utilities.exceptions import AbortRequest
 
-from .cable_history import HistoryConflictError, history_for_rack
-from .cable_views import CableEditError, _cable_fields, _is_object_id, _port_reference, _request_data
+from .cable_history import MAX_ATOMIC_CABLE_CHANGES, HistoryConflictError, history_for_rack
+from .cable_views import CableEditError, _cable_fields, _is_object_id, _port_reference
 from .calculator import calculate_report, configured_calculator, normalize_measurements, normalize_profile, report_csv
 from .models import RackCableGeometry, RackCablePlan
 from .plan_apply import apply_rack_plan
-
-MAX_OPERATIONS = 500
-MAX_REQUEST_BYTES = 512 * 1024
-
+from .request_data import JsonRequestError, read_json_object
 
 def _geometry(rack):
     return RackCableGeometry.objects.filter(rack=rack).values_list("measurements", flat=True).first() or {}
@@ -81,11 +78,11 @@ def _visible_operations(plan, rack_data):
         target = [operation["a"], operation["b"]] if operation["action"] != "delete" else []
         original = operation.get("before", {}).values()
         removed = plan.applied_at and operation["action"] == "delete"
-        if (
-            all(key in ports for key in (*target, *original))
-            and (operation["action"] == "add" or removed or operation["cable_id"] in cables)
-        ):
+        visible_ports = all(key in ports for key in (*target, *original))
+        if visible_ports and (operation["action"] == "add" or operation["cable_id"] in cables):
             operations.append(operation)
+        elif visible_ports and removed:
+            operations.append({key: value for key, value in operation.items() if key != "cable_id"})
         else:
             operations.append({"id": operation["id"], "action": operation["action"], "restricted": True})
     return operations
@@ -97,11 +94,13 @@ def _payload(user, plan, rack_data):
         _plans_for(user, plan.rack, "delete").filter(pk=plan.pk).exists(),
     )
     visible_ids = {cable["id"] for cable in rack_data["cables"]}
+    operations = _visible_operations(plan, rack_data)
+    visible_operations = {operation["id"] for operation in operations if not operation.get("restricted")}
     return {
-        **result, "profile": plan.profile, "operations": _visible_operations(plan, rack_data),
+        **result, "profile": plan.profile, "operations": operations,
         "result": {
             "ids": {key: value for key, value in plan.result.get("ids", {}).items()
-                    if value is None or value in visible_ids},
+                    if key in visible_operations and (value is None or value in visible_ids)},
             "status": plan.result["status"],
         } if plan.applied_at else None,
     }
@@ -122,8 +121,8 @@ def _local_cable(cable):
 
 
 def _clean_operations(user, plan, raw, rack_data):
-    if not isinstance(raw, list) or len(raw) > MAX_OPERATIONS:
-        raise CableEditError(f"A plan can contain up to {MAX_OPERATIONS} operations.", 400)
+    if not isinstance(raw, list) or len(raw) > MAX_ATOMIC_CABLE_CHANGES:
+        raise CableEditError(f"A plan can contain up to {MAX_ATOMIC_CABLE_CHANGES} operations.", 400)
     ports = _rack_ports(rack_data)
     cables = {cable["id"]: cable for cable in rack_data["cables"]}
     existing = {row["cable_id"]: row for row in plan.operations if row["action"] != "add"}
@@ -277,12 +276,17 @@ def _json_errors(view):
     def handled(*args, **kwargs):
         try:
             return view(*args, **kwargs)
+        except JsonRequestError as exc:
+            return JsonResponse({"error": str(exc)}, status=exc.status)
         except CableEditError as exc:
             clear_events.send(sender=Cable)
             return JsonResponse({"error": str(exc)}, status=exc.status)
-        except (ValidationError, AbortRequest, HistoryConflictError) as exc:
+        except HistoryConflictError as exc:
             clear_events.send(sender=Cable)
-            return JsonResponse({"error": " ".join(getattr(exc, "messages", [str(exc)]))}, status=409)
+            return JsonResponse({"error": str(exc)}, status=exc.status)
+        except (ValidationError, AbortRequest):
+            clear_events.send(sender=Cable)
+            return JsonResponse({"error": "NetBox rejected the rack plan operation."}, status=409)
         except IntegrityError:
             clear_events.send(sender=Cable)
             return JsonResponse({"error": "The name or an endpoint is already in use, or the rack changed. Reload and try again."}, status=409)
@@ -291,16 +295,8 @@ def _json_errors(view):
                 raise
             clear_events.send(sender=Cable)
             return JsonResponse({"error": "A concurrent edit changed the rack. Reload and try again."}, status=409)
-        except (RequestDataTooBig, RecursionError):
-            return JsonResponse({"error": "The planning request is too large."}, status=413)
 
     return handled
-
-
-def _data(request):
-    if len(request.body) > MAX_REQUEST_BYTES:
-        raise CableEditError("The planning request is too large.", 413)
-    return _request_data(request)
 
 
 def _validated(normalizer, raw, **kwargs):
@@ -329,6 +325,8 @@ def _create_plan(user, rack, **fields):
 @_json_errors
 def rack_plans(request, pk):
     user = request.user
+    if request.method == "POST" and not user.is_authenticated:
+        raise CableEditError("Sign in to edit rack plans and measurements.", 403)
     rack = get_object_or_404(Rack.objects.restrict(user), pk=pk)
     if request.method == "GET":
         editable = set(_plans_for(user, rack, "change").values_list("pk", flat=True))
@@ -336,7 +334,7 @@ def rack_plans(request, pk):
         return JsonResponse({"plans": [_summary(plan, plan.pk in editable, plan.pk in deletable)
                                        for plan in _plans_for(user, rack).defer("operations", "profile", "catalog", "result")]})
 
-    data = _data(request)
+    data = read_json_object(request)
     action = data.get("action")
     with transaction.atomic():
         if action == "geometry":
@@ -361,13 +359,15 @@ def rack_plans(request, pk):
 @_json_errors
 def rack_plan(request, pk, plan_id):
     user = request.user
+    if request.method == "POST" and not user.is_authenticated:
+        raise CableEditError("Sign in to edit rack plans.", 403)
     rack = get_object_or_404(Rack.objects.restrict(user), pk=pk)
     visible = _plans_for(user, rack)
     if request.method == "GET":
         plan = get_object_or_404(visible, pk=plan_id)
         return JsonResponse({"plan": _payload(user, plan, _rack_data(request, rack))})
 
-    data = _data(request)
+    data = read_json_object(request)
     action = data.get("action")
     db = router.db_for_write(Cable)
     with transaction.atomic(using=db):

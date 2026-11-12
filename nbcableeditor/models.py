@@ -1,17 +1,30 @@
 from django.conf import settings
-from django.db import models
+from django.core.exceptions import PermissionDenied
+from django.db import models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
 from utilities.querysets import RestrictedQuerySet
 
 
 class CableEditorSettings(models.Model):
+    CHANGE_PERMISSION = "nbcableeditor.change_cableeditorsettings"
+
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     options = models.JSONField(default=dict, blank=True)
 
     class Meta:
         verbose_name = "Cable Editor settings"
         constraints = [models.CheckConstraint(condition=Q(id=1), name="nbcableeditor_settings_singleton")]
+
+    @transaction.atomic
+    def save_options(self, user, options):
+        if not user.has_perm(self.CHANGE_PERMISSION, self):
+            raise PermissionDenied
+        self.options = options
+        self.save(update_fields=["options"])
+        # NetBox evaluates object constraints against the saved database row.
+        if not user.has_perm(self.CHANGE_PERMISSION, self):
+            raise PermissionDenied
 
 
 class LayoutRevision(models.Model):

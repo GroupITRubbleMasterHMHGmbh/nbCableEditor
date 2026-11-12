@@ -3,6 +3,7 @@
 
   const root = document.querySelector("#nre-layout");
   const data = JSON.parse(document.querySelector("#nre-layout-data").textContent);
+  const httpUrl = globalThis.NbCableEditorHttpUrl;
   const find = (name) => root.querySelector("[data-" + name + "]");
   const stage = find("stage");
   const image = find("image");
@@ -418,7 +419,7 @@
   }
 
   function background() {
-    const source = (face === "front" ? data.frontImage : data.rearImage) || "";
+    const source = httpUrl(face === "front" ? data.frontImage : data.rearImage, true) ?? "";
     if (source !== (image.getAttribute("src") ?? "")) {
       image.hidden = true;
       if (source) image.src = source;

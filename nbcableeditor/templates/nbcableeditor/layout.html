@@ -234,7 +234,7 @@
         {% endif %}
         <div class="nre-layout-image-scroll">
           <div class="nre-layout-stage" data-stage data-active-tool="select" role="group" tabindex="-1" aria-label="Front layout">
-            <img class="nre-layout-image" data-image alt="" draggable="false" hidden>
+            <img class="nre-layout-image" data-image alt="" draggable="false" referrerpolicy="no-referrer" hidden>
             <div class="nre-layout-placeholder" data-placeholder></div>
             <div class="nre-layout-snap-grid" aria-hidden="true"></div>
             <div class="nre-layout-design-items" data-design-items></div>
@@ -345,6 +345,7 @@
 
 {% block javascript %}
   {{ block.super }}
+  <script src="{% static 'nbcableeditor/http-url.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/layout-geometry.js' %}?v={{ editor_version }}" defer></script>
   {% if layout_data.canEdit %}
     <script src="{% static 'nbcableeditor/layout-template.js' %}?v={{ editor_version }}" defer></script>

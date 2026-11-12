@@ -1,4 +1,3 @@
-import json
 import re
 from collections import defaultdict
 from copy import deepcopy
@@ -17,12 +16,14 @@ from core.signals import clear_events
 from dcim.choices import CableEndChoices, CableLengthUnitChoices, CableProfileChoices, CableTypeChoices, LinkStatusChoices
 from dcim.constants import NONCONNECTABLE_IFACE_TYPES
 from dcim.models import Cable, CableTermination, Device, FrontPort, Interface, Rack, RearPort
-from extras.models import Tag
+from extras.choices import CustomFieldTypeChoices
+from extras.models import CustomField
 from utilities.conversion import to_meters
 from utilities.exceptions import AbortRequest
 
 from .cable_history import HistoryConflictError, history_payload, jump_history, lock_history, record_history
-from .metadata_tags import TagEditError, available_tags, updated_tags, visible_tags
+from .metadata_tags import TagEditError, replayed_tags, updated_tags, visible_tags
+from .request_data import JsonRequestError, read_json_object
 
 
 MAX_BATCH_OPERATIONS = 100
@@ -98,18 +99,6 @@ def _port_groups(keys):
         model, pk = reference
         groups[model].add(pk)
     return groups
-
-
-def _request_data(request):
-    if request.content_type != "application/json":
-        raise CableEditError("Send an application/json request.", 415)
-    try:
-        data = json.loads(request.body)
-    except (ValueError, RecursionError):
-        raise CableEditError("Invalid JSON request.", 400) from None
-    if not isinstance(data, dict):
-        raise CableEditError("Invalid cable request.", 400)
-    return data
 
 
 def _cable_text(data, field):
@@ -341,6 +330,33 @@ def _cable_snapshot(db, cable, ends=None, *, metadata_only=False):
     return snapshot
 
 
+def _check_restored_relations(db, user, fields):
+    # Restoring a deleted cable assigns these references again under current permissions.
+    relations = defaultdict(set)
+    for name in ("tenant", "owner"):
+        if pk := fields.get(f"{name}_id"):
+            relations[Cable._meta.get_field(name).related_model].add(pk)
+
+    custom_values = fields.get("custom_field_data") or {}
+    object_fields = CustomField.objects.db_manager(db).get_for_model(Cable).filter(
+        name__in=custom_values, type__in=(CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT),
+    ).select_related("related_object_type")
+    message = "A reference from the recorded cable is no longer available."
+    for field in object_fields:
+        if not (value := custom_values[field.name]):
+            continue
+        model = field.related_object_type.model_class() if field.related_object_type else None
+        ids = [value] if field.type == CustomFieldTypeChoices.TYPE_OBJECT else value
+        if model is None or not isinstance(ids, list) or not all(map(_is_object_id, ids)):
+            raise CableEditError(message, 409)
+        relations[model].update(ids)
+
+    for model, ids in relations.items():
+        queryset = model._default_manager.using(db)
+        if not hasattr(queryset, "restrict") or queryset.restrict(user).filter(pk__in=ids).count() != len(ids):
+            raise CableEditError(message, 409)
+
+
 def _edit_cable_metadata(db, user, rack_id, data):
     cable_id = data.get("cable_id")
     if not _is_object_id(cable_id):
@@ -457,6 +473,7 @@ def _apply_cable_change(db, user, rack_id, expected, desired):
 
     fields = deepcopy(desired["fields"])
     if cable is None:
+        _check_restored_relations(db, user, fields)
         cable = Cable(pk=cable_id, **fields)
     else:
         for key, value in fields.items():
@@ -465,11 +482,7 @@ def _apply_cable_change(db, user, rack_id, expected, desired):
         cable.a_terminations = [ports[desired["ends"][CableEndChoices.SIDE_A]["port"]]]
         cable.b_terminations = [ports[desired["ends"][CableEndChoices.SIDE_B]["port"]]]
 
-    tags = None
-    if expected is None or desired["tags"] != expected["tags"]:
-        tags = list(Tag.objects.using(db).filter(pk__in=desired["tags"]))
-        if len(tags) != len(desired["tags"]):
-            raise CableEditError("A tag from the original cable is no longer available.", 409)
+    tags = replayed_tags(db, user, Cable, expected["tags"] if expected else (), desired["tags"])
     _save_cable(db, cable, allowed, tags=tags)
     if _cable_snapshot(db, cable) != desired:
         raise CableEditError("The original cable state is no longer valid in NetBox.", 409)
@@ -479,12 +492,7 @@ def _apply_metadata_change(db, user, rack_id, expected, desired):
     cable, ends, allowed = _lock_rack_cable_metadata(db, user, rack_id, expected["id"])
     if _cable_snapshot(db, cable, ends, metadata_only=True) != expected:
         raise CableEditError("This cable has changed since the recorded operation.", 409)
-    tags = None
-    changed_tags = set(expected["tags"]) ^ set(desired["tags"])
-    if changed_tags:
-        if available_tags(db, user, Cable).filter(pk__in=changed_tags).count() != len(changed_tags):
-            raise CableEditError("A tag from the recorded change is no longer available.", 409)
-        tags = list(Tag.objects.using(db).filter(pk__in=desired["tags"]))
+    tags = replayed_tags(db, user, Cable, expected["tags"], desired["tags"])
     cable.snapshot()
     for name, value in desired["fields"].items():
         setattr(cable, name, deepcopy(value))
@@ -558,8 +566,8 @@ def mutate_cable(request, pk):
         return JsonResponse({"error": "Rack not found."}, status=404)
 
     try:
-        data = _request_data(request)
-    except CableEditError as exc:
+        data = read_json_object(request)
+    except JsonRequestError as exc:
         return JsonResponse({"error": str(exc)}, status=exc.status)
 
     db = router.db_for_write(Cable)

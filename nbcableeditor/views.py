@@ -1,4 +1,3 @@
-import json
 import re
 from collections import defaultdict
 from urllib.parse import urlencode
@@ -7,7 +6,7 @@ from core.models import ObjectType
 from dcim.constants import NONCONNECTABLE_IFACE_TYPES
 from dcim.models import (
     Cable, Device, DeviceType, FrontPort, FrontPortTemplate, Interface, InterfaceTemplate,
-    ModuleBayTemplate, ModuleType, Rack, RearPort, RearPortTemplate,
+    Manufacturer, ModuleBayTemplate, ModuleType, Rack, RearPort, RearPortTemplate,
 )
 from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Prefetch, Q, prefetch_related_objects
@@ -17,7 +16,8 @@ from django.urls import reverse
 from django.utils.translation import override
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_GET, require_POST
-from extras.models import Bookmark, ImageAttachment, JournalEntry, Subscription
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
+from extras.models import Bookmark, CustomField, ImageAttachment, JournalEntry, Subscription
 from ipam.models import VLAN
 
 from . import NbCableEditorConfig
@@ -30,12 +30,16 @@ from .metadata_tags import available_tags, tag_data
 from .models import LayoutRevision, PortPlacement
 from .plan_views import plan_bootstrap
 from .rack_layouts import rack_layouts
-from .rack_traces import PORT_KINDS, endpoint_data, native_path, port_metadata, readable_nodes, trace_payload
+from .rack_traces import (
+    PORT_KINDS, device_label, endpoint_data, native_path, port_metadata, readable_chassis_names,
+    readable_nodes, trace_payload,
+)
+from .request_data import JsonRequestError, read_json_object
 
 
-MAX_LAYOUT_BYTES = 512 * 1024
 MAX_DESIGN_ITEMS_PER_FACE = 256
 LAYOUT_FACES = ("front", "rear")
+NO_IMAGES = {"frontImage": None, "rearImage": None}
 LAYOUT_TYPES = {
     "device": (DeviceType, "device_type", "Device type", "placements"),
     "module": (ModuleType, "module_type", "Module type", "module-placements"),
@@ -86,11 +90,9 @@ def _module_images(user, module_type_ids):
     return images
 
 
-def _images(layout_owner, user=None):
+def _images(layout_owner, user):
     if isinstance(layout_owner, ModuleType):
-        if user is not None:
-            return _module_images(user, [layout_owner.pk])[layout_owner.pk]
-        return {"frontImage": None, "rearImage": None}
+        return _module_images(user, [layout_owner.pk])[layout_owner.pk]
     return {
         "frontImage": layout_owner.front_image.url if layout_owner.front_image else None,
         "rearImage": layout_owner.rear_image.url if layout_owner.rear_image else None,
@@ -219,13 +221,9 @@ def layout_editor(request, pk, kind="device"):
     })
 
 
-def _parse_layout(raw):
-    if len(raw) > MAX_LAYOUT_BYTES:
-        raise ValueError("The port layout is too large.")
-    body = json.loads(raw)
+def _parse_layout(body):
     if (
-        not isinstance(body, dict)
-        or type(body.get("revision")) is not int
+        type(body.get("revision")) is not int
         or body["revision"] < 0
         or not isinstance(body.get("placements"), list)
     ):
@@ -339,12 +337,14 @@ def _parse_design_item(item):
 @csrf_protect
 def save_layout(request, pk, kind="device"):
     model, field, label, _ = LAYOUT_TYPES[kind]
-    if request.content_type != "application/json":
-        return JsonResponse({"error": "Send the layout as JSON."}, status=415)
+    if not request.user.is_authenticated:
+        return JsonResponse({"error": f"You cannot change this {label.lower()}."}, status=403)
     try:
-        revision, placements, design = _parse_layout(request.body)
-    except (json.JSONDecodeError, UnicodeError, RecursionError):
-        return JsonResponse({"error": "The port layout is not valid JSON."}, status=400)
+        revision, placements, design = _parse_layout(read_json_object(request))
+    except JsonRequestError as exc:
+        return JsonResponse({"error": str(exc)}, status=exc.status)
+    except UnicodeError:
+        return JsonResponse({"error": "The port layout contains an invalid character."}, status=400)
     except ValueError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
@@ -370,11 +370,14 @@ def save_layout(request, pk, kind="device"):
                 for face, options in design.items():
                     if any(item["kind"] == "bay" and item["bay"] not in allowed_bays for item in options["items"]):
                         return JsonResponse({"error": "A module bay is no longer available for this layout."}, status=400)
+                    previous_items = updated_design.get(face, {}).get("items", [])
                     hidden_bays = [
-                        item for item in updated_design.get(face, {}).get("items", [])
-                        if item["kind"] == "bay" and item["bay"] not in allowed_bays
+                        item for item in previous_items if item["kind"] == "bay" and item["bay"] not in allowed_bays
                     ]
-                    updated_design[face] = {**options, "items": options["items"] + hidden_bays}
+                    items = options["items"] + hidden_bays
+                    if len(items) > max(MAX_DESIGN_ITEMS_PER_FACE, len(previous_items)):
+                        return JsonResponse({"error": "The resulting face exceeds the design limit."}, status=400)
+                    updated_design[face] = {**options, "items": items}
             # An editor with restricted template permissions only replaces their visible subset.
             _layout_placements(allowed_ports).delete()
             PortPlacement.objects.bulk_create(placements.values())
@@ -389,6 +392,8 @@ def save_layout(request, pk, kind="device"):
 
 def _vlan_data_for_ports(user, ports):
     ports = list(ports)
+    if not ports:
+        return {}
     readable = VLAN.objects.restrict(user).only("vid", "name", "custom_field_data")
     prefetch_related_objects(
         ports,
@@ -400,9 +405,13 @@ def _vlan_data_for_ports(user, ports):
         ),
     )
 
+    show_color = CustomField.objects.get_for_model(VLAN).filter(
+        name="editorColorHex", type=CustomFieldTypeChoices.TYPE_TEXT,
+    ).exclude(ui_visible=CustomFieldUIVisibleChoices.HIDDEN).exists()
+
     def vlan_data(vlan):
         data = {"vid": vlan.vid, "name": vlan.name}
-        color = vlan.custom_field_data.get("editorColorHex")
+        color = vlan.custom_field_data.get("editorColorHex") if show_color else None
         if isinstance(color, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
             data["color"] = color.upper()
         return data
@@ -554,13 +563,27 @@ def _nbcableeditor_context(request, pk):
     editor_settings, custom_fields = nbcableeditor_options()
     devices = list(
         Device.objects.restrict(user).filter(rack=rack)
-        .select_related("device_type__manufacturer").order_by("name", "pk")
+        .select_related("device_type").order_by("name", "pk")
     )
     device_map = {device.pk: device for device in devices}
     type_ids = {device.device_type_id for device in devices}
     visible_types = set(
         DeviceType.objects.restrict(user).filter(pk__in=type_ids).values_list("pk", flat=True)
     )
+    chassis_names = readable_chassis_names(user, devices)
+    maker_ids = {device.device_type.manufacturer_id for device in devices
+                 if device.device_type_id in visible_types and not device_label(device, chassis_names)}
+    makers = dict(Manufacturer.objects.restrict(user).filter(pk__in=maker_ids).values_list("pk", "name"))
+
+    def display_name(device):
+        if label := device_label(device, chassis_names):
+            return f"{label} ({device.asset_tag})" if device.asset_tag else label
+        name = "Device"
+        if device.device_type_id in visible_types:
+            maker = makers.get(device.device_type.manufacturer_id)
+            name = f"{maker} {device.device_type.model}" if maker else device.device_type.model
+        return f"{name} ({device.asset_tag or device.pk})"
+
     by_template, by_module_template, artwork = rack_layouts(
         user, devices, visible_types, LAYOUT_PORTS, layout_designs, _module_images,
     )
@@ -639,13 +662,13 @@ def _nbcableeditor_context(request, pk):
             "devices": [
                 {
                     "id": device.pk,
-                    "name": str(device),
+                    "name": display_name(device),
                     "deviceType": device.device_type.model if device.device_type_id in visible_types else None,
                     "position": float(device.position) if device.position is not None else None,
                     "height": float(device.device_type.u_height),
                     "face": device.face or None,
                     "fullDepth": device.device_type.is_full_depth,
-                    **_images(device.device_type),
+                    **(_images(device.device_type, user) if device.device_type_id in visible_types else NO_IMAGES),
                     "design": artwork.get(device.pk, {}),
                     "layoutUrl": _route("layout", device.device_type_id) if device.device_type_id in visible_types else None,
                     "url": device.get_absolute_url(),

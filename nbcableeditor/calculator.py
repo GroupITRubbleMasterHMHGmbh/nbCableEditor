@@ -6,6 +6,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from unicodedata import category, normalize
 
 from dcim.choices import RackFormFactorChoices
 from dcim.models import Cable
@@ -386,8 +387,13 @@ def report_csv(report, kind):
     def safe(value):
         if isinstance(value, float):
             return format(Decimal(str(value)).normalize(), "f").replace(".", ",")
-        if isinstance(value, str) and value.lstrip(" \t\r\n").startswith(("=", "+", "-", "@")):
-            return "'" + value
+        if isinstance(value, str):
+            for character in normalize("NFKC", value):
+                if character in "=+-@\t\r\n":
+                    # Keep the marker as a visible part of the cell value.
+                    return "\u2019" + value
+                if not character.isspace() and category(character) not in ("Cc", "Cf"):
+                    break
         return value
 
     def endpoint_name(endpoint):

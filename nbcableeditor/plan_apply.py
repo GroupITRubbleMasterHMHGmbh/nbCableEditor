@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from dcim.choices import CableEndChoices, LinkStatusChoices
 from dcim.models import Cable, CableTermination
 from django.db.models import QuerySet
-from extras.models import Tag
 
 from .cable_history import history_payload, lock_history, record_history
 from .cable_views import (
@@ -14,12 +13,14 @@ from .cable_views import (
     _cable_snapshot,
     _check_current_ends,
     _check_free_ports,
+    _check_restored_relations,
     _delete_cable,
     _lock_cable,
     _lock_ports,
     _save_cable,
     port_unavailable,
 )
+from .metadata_tags import replayed_tags
 
 
 A = CableEndChoices.SIDE_A
@@ -94,11 +95,13 @@ def _release_ports(db, changes):
                 end.delete(using=db)
 
 
-def _save_target(db, ports, change):
+def _save_target(db, user, ports, change):
     target = change.target
     fields = deepcopy(target["fields"])
     cable = change.cable
     if cable is None:
+        if target.get("id") is not None:
+            _check_restored_relations(db, user, fields)
         cable = Cable(pk=target.get("id"), **fields)
     else:
         for key, value in fields.items():
@@ -107,11 +110,7 @@ def _save_target(db, ports, change):
         cable.a_terminations = [ports[target["ends"][A]["port"]]]
         cable.b_terminations = [ports[target["ends"][B]["port"]]]
 
-    tags = None
-    if change.before is None or change.before["tags"] != target["tags"]:
-        tags = list(Tag.objects.using(db).filter(pk__in=target["tags"]))
-        if len(tags) != len(target["tags"]):
-            raise CableEditError("A tag from the original cable is no longer available.", 409)
+    tags = replayed_tags(db, user, Cable, change.before["tags"] if change.before else (), target["tags"])
     _save_cable(db, cable, change.allowed, tags=tags)
     return _cable_snapshot(db, cable)
 
@@ -121,7 +120,7 @@ def _apply_graph(db, user, rack_id, changes):
     _release_ports(db, changes)
     deltas = []
     for change in changes:
-        after = _save_target(db, ports, change) if change.target is not None else None
+        after = _save_target(db, user, ports, change) if change.target is not None else None
         if after is not None and change.target.get("id") is not None and after != change.target:
             raise CableEditError(f"Cable #{after['id']} could not be restored to the expected state in NetBox.", 409)
         deltas.append({"before": change.before, "after": after})

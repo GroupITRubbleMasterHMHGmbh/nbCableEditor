@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from core.models import ObjectType
 from dcim.choices import (
     CableTypeChoices, InterfaceDuplexChoices, InterfaceModeChoices, InterfacePoEModeChoices, InterfacePoETypeChoices,
@@ -5,15 +7,17 @@ from dcim.choices import (
 )
 from dcim.models import (
     Cable, Device, DeviceRole, DeviceType, FrontPort, FrontPortTemplate, Interface, InterfaceTemplate, Manufacturer,
-    PortMapping, Rack, RearPort, RearPortTemplate, Site,
+    PortMapping, Rack, RearPort, RearPortTemplate, Site, VirtualChassis,
 )
 from django.core.exceptions import ValidationError
 from django.urls import reverse
+from extras.choices import CustomFieldUIVisibleChoices
 from extras.models import CustomField, JournalEntry
 from ipam.models import VLAN
 from users.models import ObjectPermission
 from utilities.testing import TestCase
 
+from nbcableeditor.configuration import cable_custom_values
 from nbcableeditor.models import PortPlacement
 
 
@@ -116,6 +120,64 @@ class RackLayoutTestCase(TestCase):
         permission.users.add(self.user)
         self.assertEqual(self.save(1).status_code, 200)
         self.assertEqual(PortPlacement.objects.get().interface_template_id, self.last.pk)
+
+    def test_rack_does_not_project_restricted_type_images_or_template_placements(self):
+        Device.objects.filter(pk=self.device.pk).update(name=None)
+        PortPlacement.objects.create(interface_template=self.first, face="front", x=.2, y=.5)
+        PortPlacement.objects.create(interface_template=self.last, face="front", x=.7, y=.5, label="Private layout label")
+        self.restrict_view(InterfaceTemplate, {"pk": self.first.pk})
+        url = self.route("rack", self.rack)
+
+        def get_device():
+            rack_data = self.client.get(url).context["rack_data"]
+            return next(device for device in rack_data["devices"] if device["id"] == self.device.pk)
+
+        device = get_device()
+        self.assertEqual(device["name"], f"{self.device_type.model} ({self.device.pk})")
+        self.assertTrue(device["frontImage"].endswith("/front.png"))
+        ports = {port["name"]: port for port in device["ports"]}
+        self.assertEqual(ports[self.first.name]["x"], .2)
+        self.assertIsNone(ports[self.last.name]["x"])
+        self.assertNotIn("layoutLabel", ports[self.last.name])
+
+        self.restrict_view(DeviceType, {"pk": self.foreign.device_type_id})
+        device = get_device()
+        self.assertEqual(device["name"], f"Device ({self.device.pk})")
+        self.assertIsNone(device["deviceType"])
+        self.assertIsNone(device["layoutUrl"])
+        self.assertIsNone(device["frontImage"])
+        self.assertIsNone(device["rearImage"])
+        self.assertTrue(all(port["x"] is None for port in device["ports"]))
+
+    def test_rack_and_remote_endpoint_redact_hidden_virtual_chassis(self):
+        chassis = VirtualChassis.objects.create(name="Private chassis")
+        Device.objects.filter(pk=self.device.pk).update(name=None, virtual_chassis=chassis, vc_position=1)
+        Device.objects.filter(pk=self.external.pk).update(name=None, virtual_chassis=chassis, vc_position=2)
+        local = Interface.objects.get(device=self.device, name=self.first.name)
+        remote = Interface.objects.get(device=self.external, name=self.first.name)
+        Cable.objects.create(a_terminations=[local], b_terminations=[remote])
+        url = self.route("rack", self.rack)
+
+        self.add_permissions("dcim.view_virtualchassis")
+        data = self.client.get(url).context["rack_data"]
+        self.assertIn("Private chassis:1", {device["name"] for device in data["devices"]})
+        self.assertEqual(data["cables"][0]["endpointB"]["deviceName"], "Private chassis:2")
+
+        self.remove_permissions("dcim.view_virtualchassis")
+        response = self.client.get(url)
+        self.assertNotContains(response, chassis.name)
+        self.assertEqual(response.context["rack_data"]["cables"][0]["endpointB"]["deviceName"], "Unnamed device")
+
+    def test_cable_object_custom_field_avoids_related_names_in_device_label(self):
+        Device.objects.filter(pk=self.device.pk).update(name=None)
+        cable = SimpleNamespace(pk=1, custom_field_data={"related_device": self.device.pk})
+        field = CustomField(
+            name="related_device", type="object", related_object_type=ObjectType.objects.get_for_model(Device),
+        )
+        self.remove_permissions("dcim.view_devicetype")
+        self.assertEqual(cable_custom_values(self.user, [cable], [field]), {
+            1: {"related_device": f"Device {self.device.pk}"},
+        })
 
     def test_rack_payload_redacts_endpoints_and_cables_by_permission(self):
         self.add_permissions("dcim.change_cable", "dcim.delete_cable")
@@ -236,6 +298,22 @@ class RackLayoutTestCase(TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
                 field.validate(invalid)
 
+    def test_hidden_vlan_editor_color_is_not_returned(self):
+        self.add_permissions("ipam.view_vlan")
+        vlan = VLAN.objects.create(vid=10, name="Management", custom_field_data={"editorColorHex": "#16A34A"})
+        interface = Interface.objects.get(device=self.device, name=self.first.name)
+        Interface.objects.filter(pk=interface.pk).update(untagged_vlan=vlan)
+        url = self.route("rack", self.rack)
+
+        def get_vlan():
+            data = self.client.get(url).context["rack_data"]
+            return next(port["untaggedVlan"] for device in data["devices"] for port in device["ports"]
+                        if port["id"] == interface.pk)
+
+        self.assertEqual(get_vlan(), {"vid": 10, "name": "Management", "color": "#16A34A"})
+        CustomField.objects.filter(name="editorColorHex").update(ui_visible=CustomFieldUIVisibleChoices.HIDDEN)
+        self.assertEqual(get_vlan(), {"vid": 10, "name": "Management"})
+
     def test_remote_endpoint_metadata_respects_interface_rack_and_type_visibility(self):
         native = VLAN.objects.create(vid=15, name="Remote native")
         tagged = VLAN.objects.create(vid=25, name="Remote tagged")
@@ -293,7 +371,9 @@ class RackLayoutTestCase(TestCase):
         self.assertIsNone(get_cable()["endpointA"])
 
     def test_native_trace_through_panel_and_outlet_is_open_or_complete_and_respects_permissions(self):
-        self.add_permissions("dcim.change_cable", "dcim.delete_cable")
+        self.add_permissions(
+            "dcim.change_cable", "dcim.delete_cable", "dcim.view_frontporttemplate", "dcim.view_rearporttemplate",
+        )
         switch_port = Interface.objects.get(device=self.device, name=self.first.name)
         client = Device.objects.create(
             device_type=self.device_type, role=self.device.role, site=self.device.site, rack=self.other_rack,

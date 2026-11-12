@@ -5,6 +5,7 @@
   if (!editor) return;
 
   const data = JSON.parse(document.getElementById("re-rack-data").textContent);
+  const httpUrl = globalThis.NbCableEditorHttpUrl;
   const get = (name) => editor.querySelector("[data-" + name + "]");
   const workspace = get("workspace");
   const viewOptions = get("view-options");
@@ -293,17 +294,6 @@
     const element = node("button", className, label);
     element.type = "button";
     return element;
-  }
-
-  function httpUrl(value, allowRemote = false) {
-    if (!value) return null;
-    try {
-      const url = new URL(value, document.baseURI);
-      if (!["http:", "https:"].includes(url.protocol)) return null;
-      return allowRemote || url.origin === location.origin ? url.href : null;
-    } catch {
-      return null;
-    }
   }
 
   function link(value, label, className) {
@@ -816,6 +806,7 @@
           if (url) {
             const image = node("img", "re-rack-module-image");
             image.alt = "";
+            image.referrerPolicy = "no-referrer";
             image.src = url;
             element.append(image);
           }
@@ -919,6 +910,7 @@
           image = node("img");
           image.alt = "";
           image.draggable = false;
+          image.referrerPolicy = "no-referrer";
           image.toggleAttribute("data-layout-image-hidden", design?.useImage === false);
           image.addEventListener("load", invalidateRoutes);
           image.addEventListener("error", invalidateRoutes);
@@ -3369,7 +3361,6 @@
       bounds: job.bounds, protectedAreas: job.protectedAreas,
       strategy: job.strategy, spacing: job.spacing, horizontalSpacing: job.horizontalSpacing,
       deviceClearance: job.deviceClearance,
-      scripts: Array.from(document.querySelectorAll("[data-rack-routing-script]"), script => script.src),
     });
   }
 
@@ -3387,7 +3378,9 @@
     if (workerUnavailable || !editor.dataset.routingWorkerUrl) return false;
     try {
       if (!routingWorker) {
-        routingWorker = new Worker(editor.dataset.routingWorkerUrl);
+        const url = httpUrl(editor.dataset.routingWorkerUrl);
+        if (!url) return false;
+        routingWorker = new Worker(url);
         routingWorker.addEventListener("message", (event) => {
           const completed = activeJob;
           if (!event.data.paths) {
@@ -4012,7 +4005,7 @@
     if (!url || !csrf) throw new Error("The editor could not start this request. Refresh the page and try again.");
     const response = await fetch(url, {
       method: "POST",
-      credentials: "same-origin",
+      mode: "same-origin",
       headers: {"Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": csrf},
       body: JSON.stringify(body),
     });

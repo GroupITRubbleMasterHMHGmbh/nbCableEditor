@@ -18,6 +18,7 @@ from utilities.testing import TestCase
 from nbcableeditor.cable_history import history_for_rack
 from nbcableeditor.cable_views import port_key
 from nbcableeditor.models import CableHistoryEntry
+from nbcableeditor.request_data import MAX_JSON_BYTES
 
 
 class CableEditorTestCase(TestCase):
@@ -287,6 +288,7 @@ class CableEditorTestCase(TestCase):
             {"length": "-1", "length_unit": "m"},
             {"length": True, "length_unit": "m"},
             {"length": "NaN", "length_unit": "m"},
+            {"length": "1e999999", "length_unit": "m"},
             {"length": "1.001", "length_unit": "m"},
             {"length": "1000", "length_unit": "km"},
         ):
@@ -659,7 +661,9 @@ class CableEditorTestCase(TestCase):
         self.assertEqual(oversized.status_code, 400, oversized.content)
 
     def test_undo_delete_restores_native_cable_metadata_and_profile(self):
-        self.add_permissions("dcim.add_cable", "dcim.delete_cable")
+        self.add_permissions(
+            "dcim.add_cable", "dcim.delete_cable", "extras.view_tag", "tenancy.view_tenant", "users.view_owner",
+        )
         field = CustomField.objects.create(name="patch_ticket", type=CustomFieldTypeChoices.TYPE_TEXT)
         field.object_types.add(ObjectType.objects.get_for_model(Cable))
         tag = Tag.objects.create(name="Spare patch", slug="spare-patch")
@@ -695,6 +699,29 @@ class CableEditorTestCase(TestCase):
             changed_object_type=ObjectType.objects.get_for_model(Cable), changed_object_id=cable.pk,
             action=ObjectChangeActionChoices.ACTION_CREATE, request_id=undo["X-Request-ID"],
         ).exists())
+
+    def test_undo_delete_requires_current_access_to_recorded_object_references(self):
+        self.add_permissions("dcim.add_cable", "dcim.delete_cable")
+        reference = CustomField.objects.create(
+            name="patch_target", type=CustomFieldTypeChoices.TYPE_OBJECT,
+            related_object_type=ObjectType.objects.get_for_model(Manufacturer),
+        )
+        reference.object_types.add(ObjectType.objects.get_for_model(Cable))
+        cable = Cable.objects.create(a_terminations=[self.a], b_terminations=[self.b], custom_field_data={
+            "patch_target": self.first.device_type.manufacturer_id,
+        })
+        deleted = self.delete(cable.pk)
+        self.assertEqual(deleted.status_code, 200, deleted.content)
+        history = deleted.json()["history"]
+        denied = self.jump(0, history["revision"])
+        self.assertEqual(denied.status_code, 409, denied.content)
+        self.assertFalse(Cable.objects.filter(pk=cable.pk).exists())
+        self.assertEqual(history_for_rack(self.user, self.rack.pk), history)
+
+        self.add_permissions("dcim.view_manufacturer")
+        restored = self.jump(0, history["revision"])
+        self.assertEqual(restored.status_code, 200, restored.content)
+        self.assertEqual(Cable.objects.get(pk=cable.pk).custom_field_data, cable.custom_field_data)
 
     def test_undo_redo_move_checks_revision(self):
         self.add_permissions("dcim.change_cable")
@@ -753,3 +780,20 @@ class CableEditorTestCase(TestCase):
         self.assertEqual(self.edit(self.a, self.b).status_code, 403)
         self.assertEqual(self.client.get(reverse("plugins:nbcableeditor:cables", args=[self.rack.pk])).status_code, 405)
         self.assertFalse(Cable.objects.exists())
+
+    def test_oversized_and_ambiguous_json_are_rejected_before_mutation(self):
+        self.add_permissions("dcim.add_cable")
+        url = reverse("plugins:nbcableeditor:cables", args=[self.rack.pk])
+        bad_json = (
+            b'{"source":1,"source":2}', b'{"length":NaN}', b'{"length":1e999999}', b'{"label":"\xff"}',
+            br'{"extra":["\u0000"]}', br'{"extra":"\ud800"}',
+        )
+        oversized = self.client.post(url, b" " * (MAX_JSON_BYTES + 1), content_type="application/json")
+        self.assertEqual(oversized.status_code, 413, oversized.content)
+        for body in bad_json:
+            with self.subTest(body=body[:60]):
+                response = self.client.post(url, body, content_type="application/json")
+                self.assertEqual(response.status_code, 400, response.content)
+                self.assertEqual(response.json()["error"], "Invalid JSON request.")
+        self.assertFalse(Cable.objects.exists())
+        self.assertEqual(history_for_rack(self.user, self.rack.pk)["entries"], [])

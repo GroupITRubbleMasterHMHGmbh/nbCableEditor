@@ -11,6 +11,7 @@ from django.urls import reverse
 
 from dcim.choices import CableProfileChoices, CableTypeChoices, InterfaceTypeChoices, LinkStatusChoices, PortTypeChoices
 from dcim.models import Cable, Device, DeviceRole, DeviceType, FrontPort, Interface, Manufacturer, PortMapping, Rack, RearPort, Site
+from extras.models import Tag
 from utilities.testing import TestCase
 
 from nbcableeditor.cable_history import history_for_rack
@@ -107,6 +108,22 @@ class RackPlanGraphTests(TestCase):
         response = self.history(1, 2)
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(self.endpoints(), {created.pk: (a.pk, y.pk)})
+
+    def test_replay_cannot_restore_tags_after_access_is_revoked(self):
+        self.add_permissions("dcim.add_cable", "dcim.delete_cable", "extras.view_tag")
+        a, _, _, x, _, _ = self.ports
+        old = Cable.objects.create(a_terminations=[a], b_terminations=[x])
+        tag = Tag.objects.create(name="Private cable tag", slug="private-cable-tag")
+        old.tags.add(tag)
+        history = self.apply([
+            {"id": "remove", "action": "delete", "cable_id": old.pk, "before": {"a": a.pk, "b": x.pk}},
+        ])["history"]
+
+        self.remove_permissions("extras.view_tag")
+        response = self.history(0, history["revision"])
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(self.endpoints(), {})
+        self.assertEqual(history_for_rack(self.user, self.rack.pk), history)
 
     def test_conflicting_live_cable_and_missing_permissions_are_rejected(self):
         a, b, _, x, y, _ = self.ports

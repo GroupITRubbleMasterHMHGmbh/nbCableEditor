@@ -129,7 +129,7 @@ Hover a connected port to read **From → Destination**, with the hovered port f
 | Move one end | Drag the connected port or its cable handle onto a free target and confirm. The existing cable keeps its ID and metadata. |
 | Remove a connection | Open the cable details and choose **Remove cable…**, or use the cable's right-click menu. |
 | Change several connections | Select **Quick connect** and click a source followed by a highlighted target to stage each pair, or select **Unplug** and click connected ports to stage removals. Choose **Apply batch** to save or **Discard** to clear the queue. |
-| Restore earlier changes | Use **Undo**, **Redo**, or choose a checkpoint in **History**. History covers cable changes saved through Cable Editor and is scoped to your account and rack. A concurrent change to the same cable can prevent a restore. |
+| Restore earlier changes | Use **Undo**, **Redo**, or choose a checkpoint in **History**. History covers cable changes saved through Cable Editor and is scoped to your account and rack. A concurrent change to the same cable or a change in your permissions can prevent a restore. If a jump exceeds 500 cable changes, choose a closer checkpoint first. |
 
 The editor draws and directly edits one-to-one cables between interfaces, front ports, and rear ports in the same rack. NetBox permissions govern which actions are available.
 

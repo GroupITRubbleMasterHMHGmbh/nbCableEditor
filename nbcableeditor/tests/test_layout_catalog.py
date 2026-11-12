@@ -53,9 +53,9 @@ class LayoutCatalogTestCase(TestCase):
         templates = templates_for("device")
         for device, slug in ((self.exact, "aruba-6100-48g-4sfp-plus"), (self.model, "aruba-6100-48g-4sfp-plus")):
             with self.subTest(device=device):
-                self.assertEqual(_suggestion(device, templates)[0].slug, slug)
-        self.assertIsNone(_suggestion(self.ambiguous, templates)[0])
-        self.assertIsNone(_suggestion(self.conflicting, templates)[0])
+                self.assertEqual(_suggestion(device, templates, "Aruba")[0].slug, slug)
+        self.assertIsNone(_suggestion(self.ambiguous, templates, "Aruba")[0])
+        self.assertIsNone(_suggestion(self.conflicting, templates, "Aruba")[0])
 
     def test_overview_search_saved_status_and_object_permissions(self):
         self.remove_permissions("dcim.view_devicetype")
@@ -76,3 +76,15 @@ class LayoutCatalogTestCase(TestCase):
         self.assertEqual([card["device"].pk for card in filtered.context["cards"]], [self.exact.pk])
         self.assertContains(filtered, "Review mapping")
         self.assertContains(filtered, "Layout saved")
+
+    def test_hidden_manufacturer_is_not_displayed_or_searchable(self):
+        Manufacturer.objects.filter(pk=self.exact.manufacturer_id).update(name="Private supplier")
+        url = reverse("plugins:nbcableeditor:layout-imports")
+        response = self.client.get(url)
+        self.assertNotContains(response, "Private supplier")
+        self.assertEqual(self.client.get(url, {"q": "Private supplier"}).context["cards"], [])
+
+        self.add_permissions("dcim.view_manufacturer")
+        response = self.client.get(url, {"q": "Private supplier"})
+        self.assertContains(response, "Private supplier")
+        self.assertEqual(len(response.context["cards"]), 4)

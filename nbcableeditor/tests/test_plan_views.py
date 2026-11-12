@@ -1,7 +1,9 @@
 from django.urls import reverse
 
+from core.models import ObjectType
 from dcim.choices import InterfaceTypeChoices
 from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufacturer, Rack, Site
+from users.models import ObjectPermission
 from utilities.testing import TestCase
 
 from nbcableeditor.models import RackCablePlan
@@ -102,3 +104,44 @@ class RackPlanningAPITests(TestCase):
         self.post(self.route("plans"), "geometry", 400, geometry={"mounting_depth_mm": -10})
         result = self.post(self.route("plans"), "geometry", geometry={"mounting_depth_mm": 500})
         self.assertEqual(result["geometry"], {"mounting_depth_mm": 500})
+
+    def test_applied_plan_hides_cable_association_for_restricted_operations(self):
+        self.add_permissions("dcim.add_cable")
+        plan = self.create()
+        detail = self.route("plan", plan["id"])
+        self.post(detail, "save", revision=0, operations=[self.operation()])
+        preview = self.post(detail, "preview", revision=1)["preview"]
+        result = self.post(detail, "apply", revision=1, token=preview["token"])
+        cable_id = result["ids"]["new-one"]
+
+        self.remove_permissions("dcim.view_interface")
+        permission = ObjectPermission.objects.create(
+            name="One readable endpoint", actions=["view"], constraints={"pk": self.ports[0].pk},
+        )
+        permission.object_types.add(ObjectType.objects.get_for_model(Interface))
+        permission.users.add(self.user)
+
+        rack_data = self.client.get(self.route("rack")).context["rack_data"]
+        self.assertIn(cable_id, {cable["id"] for cable in rack_data["cables"]})
+        payload = self.client.get(detail).json()["plan"]
+        self.assertEqual(payload["operations"], [{"id": "new-one", "action": "add", "restricted": True}])
+        self.assertEqual(payload["result"]["ids"], {})
+        retry = self.post(detail, "apply", revision=1, token=preview["token"])
+        self.assertEqual(retry["ids"], {})
+
+    def test_applied_delete_keeps_visible_endpoints_without_unreadable_cable_id(self):
+        self.add_permissions("dcim.delete_cable")
+        cable = Cable.objects.create(a_terminations=[self.ports[0]], b_terminations=[self.ports[1]])
+        plan = self.create()
+        detail = self.route("plan", plan["id"])
+        operation = {"id": "unplug", "action": "delete", "cable_id": cable.pk}
+        self.post(detail, "save", revision=0, operations=[operation])
+        preview = self.post(detail, "preview", revision=1)["preview"]
+        self.post(detail, "apply", revision=1, token=preview["token"])
+        self.remove_permissions("dcim.view_cable")
+
+        payload = self.client.get(detail).json()["plan"]
+        self.assertEqual(payload["operations"], [{
+            "id": "unplug", "action": "delete", "before": {"a": self.ports[0].pk, "b": self.ports[1].pk},
+        }])
+        self.assertEqual(payload["result"]["ids"], {"unplug": None})

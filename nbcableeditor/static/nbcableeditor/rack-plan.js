@@ -136,7 +136,7 @@
     async function fetchJson(endpoint) {
       const url = httpUrl(endpoint);
       if (!url) throw new Error("The planning URL is unavailable.");
-      const response = await fetch(url, {credentials: "same-origin", headers: {Accept: "application/json"}});
+      const response = await fetch(url, {mode: "same-origin", headers: {Accept: "application/json"}});
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "NetBox could not load the planning data.");
       return payload;

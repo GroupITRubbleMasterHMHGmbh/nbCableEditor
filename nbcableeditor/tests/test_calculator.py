@@ -118,8 +118,16 @@ class CableCalculatorTests(SimpleTestCase):
         rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig")), delimiter=";"))
         self.assertEqual([row["Minimum (mm)"] for row in rows], ["906"] * 3)
         self.assertEqual(rows[1]["NetBox length (mm)"], "609,6")
-        self.assertEqual(rows[0]["Label"], "'=potential spreadsheet formula")
+        self.assertEqual(rows[0]["Label"], "\u2019=potential spreadsheet formula")
         self.assertIn("CAT6;1000;1", report_csv(report, "bom").decode("utf-8-sig"))
+
+    def test_csv_keeps_untrusted_formula_prefixes_as_text(self):
+        devices = [device(1, 9, .2), device(2, 5, .3)]
+        labels = ('\u00a0\u200b＝1+1;"quoted"', '\tordinary', '\r\nordinary', '＠SUM(1)', 'ordinary')
+        report = self.report(devices, cables=[cable(i, label=label) for i, label in enumerate(labels, 1)])
+        output = report_csv(report, "detail").decode("utf-8-sig")
+        rows = csv.DictReader(io.StringIO(output), delimiter=";")
+        self.assertEqual([row["Label"] for row in rows], [*("\u2019" + label for label in labels[:-1]), labels[-1]])
 
     def test_stock_deduplicates_trace_segments_and_flags_special_cases(self):
         outside = cable(3, a=None, b=None, endpointA={"deviceName": "Outlet", "portName": "Front"})

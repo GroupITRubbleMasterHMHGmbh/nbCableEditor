@@ -6,7 +6,7 @@ from extras.models import ImageAttachment
 from utilities.testing import TestCase
 
 from nbcableeditor.models import LayoutRevision, PortPlacement
-from nbcableeditor.views import layout_designs
+from nbcableeditor.views import MAX_DESIGN_ITEMS_PER_FACE, layout_designs
 
 
 class TypeDesignTestCase(TestCase):
@@ -134,3 +134,14 @@ class TypeDesignTestCase(TestCase):
         self.assertEqual(LayoutRevision.objects.get(device_type=self.device_type).design, {
             "front": {"useImage": False, "items": [bay]},
         })
+
+    def test_preserved_hidden_bays_count_toward_the_face_limit(self):
+        bay = self.bay(self.device_bay, moduleFace="front")
+        stored_design = {"front": {"useImage": True, "items": [bay]}}
+        self.assertEqual(self.save(self.device_type, 0, design=stored_design).status_code, 200)
+        self.remove_permissions("dcim.view_modulebaytemplate")
+
+        text = {"kind": "text", "x": .5, "y": .1, "text": "Port", "font": "monospace", "size": 16}
+        design = {"front": {"useImage": False, "items": [text] * MAX_DESIGN_ITEMS_PER_FACE}}
+        self.assertEqual(self.save(self.device_type, 1, design=design).status_code, 400)
+        self.assertEqual(LayoutRevision.objects.get(device_type=self.device_type).design, stored_design)

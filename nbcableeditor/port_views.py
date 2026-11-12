@@ -1,4 +1,3 @@
-import json
 import re
 
 from django.core.exceptions import ValidationError
@@ -13,24 +12,13 @@ from utilities.exceptions import AbortRequest
 
 from .cable_views import _is_object_id, _port_reference, port_key
 from .metadata_tags import TagEditError, updated_tags, visible_tags
+from .request_data import JsonRequestError, read_json_object
 
 
 class PortEditError(ValueError):
     def __init__(self, message, status):
         super().__init__(message)
         self.status = status
-
-
-def _request_data(request):
-    if request.content_type != "application/json":
-        raise PortEditError("Send an application/json request.", 415)
-    try:
-        data = json.loads(request.body)
-    except (ValueError, RecursionError):
-        raise PortEditError("Invalid JSON request.", 400) from None
-    if not isinstance(data, dict) or not {"label", "tags"} & data.keys():
-        raise PortEditError("Choose at least one port detail to update.", 400)
-    return data
 
 
 def _update_port(db, user, rack_id, model, port_id, data):
@@ -81,12 +69,14 @@ def mutate_port(request, pk):
         return JsonResponse({"error": "Rack not found."}, status=404)
 
     try:
-        data = _request_data(request)
+        data = read_json_object(request)
+        if not {"label", "tags"} & data.keys():
+            raise PortEditError("Choose at least one port detail to update.", 400)
         reference = _port_reference(data.get("port_id"))
         if reference is None:
             raise PortEditError("Invalid port ID.", 400)
         model, port_id = reference
-    except PortEditError as exc:
+    except (JsonRequestError, PortEditError) as exc:
         return JsonResponse({"error": str(exc)}, status=exc.status)
 
     db = router.db_for_write(model)

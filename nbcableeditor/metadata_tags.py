@@ -4,6 +4,9 @@ from django.db.models import Q
 from extras.models import Tag
 
 
+MAX_TAG_IDS = 1000
+
+
 class TagEditError(ValueError):
     def __init__(self, message, status=400):
         super().__init__(message)
@@ -29,6 +32,8 @@ def visible_tags(db, user, obj):
 def _tag_ids(value):
     if not isinstance(value, list) or any(type(pk) is not int or not 0 < pk < 2**63 for pk in value):
         raise TagEditError("Send tag IDs as a list of positive integers.")
+    if len(value) > MAX_TAG_IDS:
+        raise TagEditError(f"Send at most {MAX_TAG_IDS} tag IDs.")
     return set(value)
 
 
@@ -45,3 +50,12 @@ def updated_tags(db, user, obj, ids, *, expected=None):
 
     # The editor can replace only the visible, applicable subset of the assignment.
     return [permitted[pk] for pk in sorted(requested)] + [tag for pk, tag in current.items() if pk not in permitted]
+
+
+def replayed_tags(db, user, model, previous, target):
+    changed = set(previous) ^ set(target)
+    if not changed:
+        return None
+    if available_tags(db, user, model).filter(pk__in=changed).count() != len(changed):
+        raise TagEditError("A tag from the recorded change is no longer available.", 409)
+    return list(Tag.objects.using(db).filter(pk__in=target))

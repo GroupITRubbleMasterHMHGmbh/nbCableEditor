@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 
-from dcim.models import Cable, Device, DeviceType, FrontPort, Interface, Rack, RearPort
+from dcim.models import Cable, Device, DeviceType, FrontPort, Interface, Rack, RearPort, VirtualChassis
 from dcim.utils import decompile_path_node
 
 from .cable_views import port_key
@@ -100,6 +100,19 @@ def readable_nodes(user, types, refs, rack_ports, known_cables):
     return port_nodes, cable_nodes
 
 
+def readable_chassis_names(user, devices):
+    ids = {device.virtual_chassis_id for device in devices if not device.name and device.virtual_chassis_id}
+    return dict(VirtualChassis.objects.restrict(user).filter(pk__in=ids).values_list("pk", "name"))
+
+
+def device_label(device, chassis_names):
+    if device.name:
+        return device.name
+    if chassis := chassis_names.get(device.virtual_chassis_id):
+        return f"{chassis}:{device.vc_position}"
+    return None
+
+
 def endpoint_data(user, port_nodes, vlans, rack_devices, rack_ports):
     def port_device(port):
         return rack_devices.get(port.device_id) or port.device
@@ -109,13 +122,14 @@ def endpoint_data(user, port_nodes, vlans, rack_devices, rack_ports):
     rack_ids = {device.rack_id for device in devices.values() if device.rack_id is not None}
     readable_types = dict(DeviceType.objects.restrict(user).filter(pk__in=type_ids).values_list("pk", "model"))
     readable_racks = dict(Rack.objects.restrict(user).filter(pk__in=rack_ids).values_list("pk", "name"))
+    chassis_names = readable_chassis_names(user, devices.values())
 
     endpoints = {}
     for key, port in port_nodes.items():
         device = devices[port.device_id]
         row = {
             **port_metadata(port),
-            "deviceName": device.name or device.label or "Unnamed device",
+            "deviceName": device_label(device, chassis_names) or "Unnamed device",
             "deviceUrl": device.get_absolute_url(),
             "portName": port.name,
             "portUrl": port.get_absolute_url(),

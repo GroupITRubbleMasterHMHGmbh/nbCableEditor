@@ -5,6 +5,9 @@ from dcim.models import Cable
 from .models import CableHistoryEntry, CableHistoryJournal
 
 
+MAX_ATOMIC_CABLE_CHANGES = 500
+
+
 class HistoryConflictError(Exception):
     def __init__(self, message, status=409):
         super().__init__(message)
@@ -55,19 +58,30 @@ def jump_history(db, journal, target, revision, apply_change, *, apply_plan=None
     if target == journal.cursor:
         return
 
+    start, end = sorted((target, journal.cursor))
+    limit_message = "This history jump covers too many cable changes. Choose a closer checkpoint."
+    # Every recorded checkpoint contains at least one change.
+    if end - start > MAX_ATOMIC_CABLE_CHANGES:
+        raise HistoryConflictError(limit_message)
+
     with transaction.atomic(using=db):
         undo = target < journal.cursor
-        start, end = sorted((target, journal.cursor))
+        remaining = MAX_ATOMIC_CABLE_CHANGES
         batches = entries.filter(sequence__gt=start, sequence__lte=end).order_by(
             "-sequence" if undo else "sequence"
         ).values_list("changes", flat=True)
-        for changes in batches.iterator(chunk_size=64):
-            if isinstance(changes, dict):
+        for batch in batches.iterator(chunk_size=8):
+            is_plan = isinstance(batch, dict)
+            changes = batch["plan"] if is_plan else batch
+            remaining -= len(changes)
+            if remaining < 0:
+                raise HistoryConflictError(limit_message)
+            if is_plan:
                 if apply_plan is None:
                     raise HistoryConflictError("This cable plan cannot be replayed.")
                 apply_plan([
                     (change["after"], change["before"]) if undo else (change["before"], change["after"])
-                    for change in changes["plan"]
+                    for change in changes
                 ])
             elif undo:
                 for change in reversed(changes):

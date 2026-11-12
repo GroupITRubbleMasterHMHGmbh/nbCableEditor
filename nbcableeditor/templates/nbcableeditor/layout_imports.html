@@ -43,7 +43,7 @@
                   <a href="{{ card.device.get_absolute_url }}">{{ card.device.model }}</a>
                 </h2>
                 <p class="text-secondary small mb-0">
-                  {{ card.device.manufacturer }}{% if card.device.part_number %} · {{ card.device.part_number }}{% endif %}
+                  {{ card.device.manufacturer_name|default_if_none:"" }}{% if card.device.part_number %}{% if card.device.manufacturer_name %} · {% endif %}{{ card.device.part_number }}{% endif %}
                 </p>
               </div>
               {% if card.device.saved_layout %}

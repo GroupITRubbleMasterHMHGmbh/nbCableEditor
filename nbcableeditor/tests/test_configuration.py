@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from core.models import ObjectType
 from dcim.models import Cable, Rack, Site
+from django.test import Client, override_settings
 from django.urls import reverse
 from extras.models import CustomField
 from users.models import ObjectPermission
@@ -32,6 +33,34 @@ class CableEditorSettingsTest(TestCase):
         self.assertEqual(self.client.post(url, self.default_form_data()).status_code, 403)
         self.assertEqual(CableEditorSettings.objects.get().options, {})
 
+    @override_settings(LOGIN_REQUIRED=True, EXEMPT_VIEW_PERMISSIONS=["dcim.rack"])
+    def test_editor_requires_login_even_when_rack_view_is_exempt(self):
+        url = reverse("plugins:nbcableeditor:rack", args=[self.rack.pk])
+        response = Client().get(url)
+        self.assertRedirects(response, f"{reverse('login')}?next={url}", fetch_redirect_response=False)
+        self.assertIn("no-store", response.headers["Cache-Control"])
+
+    @override_settings(LOGIN_REQUIRED=False, EXEMPT_VIEW_PERMISSIONS=["dcim.rack"])
+    def test_explicitly_public_rack_view_remains_available(self):
+        url = reverse("plugins:nbcableeditor:rack", args=[self.rack.pk])
+        self.assertEqual(Client().get(url).status_code, 200)
+
+    def test_rack_html_and_plan_json_are_not_cacheable(self):
+        for endpoint in ("rack", "plans"):
+            with self.subTest(endpoint=endpoint):
+                response = self.client.get(reverse(f"plugins:nbcableeditor:{endpoint}", args=[self.rack.pk]))
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("private", response.headers["Cache-Control"])
+                self.assertIn("no-store", response.headers["Cache-Control"])
+
+    def test_settings_post_requires_csrf_token(self):
+        self.add_permissions(SETTINGS_PERMISSION)
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        response = client.post(reverse(SETTINGS_ROUTE), self.default_form_data())
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(CableEditorSettings.objects.get().options, {})
+
     def test_configuration_permission_respects_object_constraints(self):
         permission = ObjectPermission.objects.create(
             name="Settings excluded by constraint", actions=["change"], constraints={"pk": 2},
@@ -39,6 +68,19 @@ class CableEditorSettingsTest(TestCase):
         permission.object_types.add(ObjectType.objects.get_for_model(CableEditorSettings))
         permission.users.add(self.user)
         self.assertEqual(self.client.get(reverse(SETTINGS_ROUTE)).status_code, 403)
+
+    def test_configuration_change_cannot_move_settings_outside_permitted_scope(self):
+        original = {"face": "front"}
+        CableEditorSettings.objects.filter(pk=1).update(options=original)
+        permission = ObjectPermission.objects.create(
+            name="Only front-facing settings", actions=["change"], constraints={"options__face": "front"},
+        )
+        permission.object_types.add(ObjectType.objects.get_for_model(CableEditorSettings))
+        permission.users.add(self.user)
+        url = reverse(SETTINGS_ROUTE)
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertEqual(self.client.post(url, {**self.default_form_data(), "face": "rear"}).status_code, 403)
+        self.assertEqual(CableEditorSettings.objects.get().options, original)
 
     def test_save_validated_settings_and_deliver_them_to_rack_viewers(self):
         self.add_permissions(SETTINGS_PERMISSION)

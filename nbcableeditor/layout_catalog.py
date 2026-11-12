@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from functools import cache
 from importlib.resources import files
 
-from dcim.models import DeviceType
+from dcim.models import DeviceType, Manufacturer
 from django.core.paginator import Paginator
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, OuterRef, Q, Subquery
 from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.http import require_GET
@@ -78,7 +78,7 @@ def templates_for(kind):
     return tuple(sorted(templates, key=lambda template: (template.name.casefold(), template.slug)))
 
 
-def _suggestion(device_type, templates):
+def _suggestion(device_type, templates, manufacturer_name):
     part = (device_type.part_number or "").strip().casefold()
     if part:
         exact = [template for template in templates if template.part_number.casefold() == part]
@@ -88,7 +88,7 @@ def _suggestion(device_type, templates):
             return None, "Several templates use this part number."
 
     model = _model_key(device_type.model)
-    vendor = _model_key(device_type.manufacturer.name)
+    vendor = _model_key(manufacturer_name or "")
     vendor_model = _model_key(VENDOR_PREFIX.sub("", device_type.model)) if vendor in VENDOR_NAMES else ""
     matches = [
         template for template in templates
@@ -108,20 +108,21 @@ def _suggestion(device_type, templates):
 def layout_imports(request):
     templates = templates_for("device")
     search = request.GET.get("q", "").strip()[:120]
-    visible = DeviceType.objects.restrict(request.user).select_related("manufacturer")
+    manufacturers = Manufacturer.objects.restrict(request.user).filter(pk=OuterRef("manufacturer_id"))
+    visible = DeviceType.objects.restrict(request.user).annotate(manufacturer_name=Subquery(manufacturers.values("name")))
     if search:
         visible = visible.filter(
-            Q(model__icontains=search) | Q(part_number__icontains=search) | Q(manufacturer__name__icontains=search)
+            Q(model__icontains=search) | Q(part_number__icontains=search) | Q(manufacturer_name__icontains=search)
         )
     editable = DeviceType.objects.restrict(request.user, "change") if request.user.is_authenticated else DeviceType.objects.none()
     devices = visible.annotate(
         can_import=Exists(editable.filter(pk=OuterRef("pk"))),
         saved_layout=Exists(LayoutRevision.objects.filter(device_type_id=OuterRef("pk"), revision__gt=0)),
-    ).order_by("manufacturer__name", "model", "pk")
+    ).order_by("manufacturer_name", "model", "pk")
     page = Paginator(devices, 24).get_page(request.GET.get("page"))
     cards = []
     for device in page:
-        suggestion, reason = _suggestion(device, templates)
+        suggestion, reason = _suggestion(device, templates, device.manufacturer_name)
         cards.append({
             "device": device,
             "editor_url": reverse("plugins:nbcableeditor:layout", args=[device.pk]),

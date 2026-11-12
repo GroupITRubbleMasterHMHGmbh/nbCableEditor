@@ -113,7 +113,7 @@ def _text(value):
     return value[:MAX_FIELD_TEXT]
 
 
-def _object_name(obj):
+def object_name(obj):
     if isinstance(obj, (DeviceType, ModuleType)):
         return obj.model
     if isinstance(obj, Device):
@@ -173,7 +173,7 @@ class RackPlaceholderValues:
                 continue
             ids = {pk for _, _, keys in occurrences for pk in keys}
             permitted = {
-                obj.pk: _object_name(obj) for obj in manager.restrict(user).filter(pk__in=ids)
+                obj.pk: object_name(obj) for obj in manager.restrict(user).filter(pk__in=ids)
             }
             for row, token, keys in occurrences:
                 row[token] = _text(", ".join(permitted[pk] for pk in keys if pk in permitted))

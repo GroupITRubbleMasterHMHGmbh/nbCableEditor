@@ -1,6 +1,6 @@
 # Install nbCableEditor
 
-nbCableEditor requires an existing NetBox 4.5 installation at version **4.5.10 or later** and **Python 3.12 or later** in the NetBox environment. The Python distribution is `nbCableEditor`. Add `nbcableeditor` in the NetBox configuration to enable **Cable Editor** under `/plugins/nbcableeditor/`.
+nbCableEditor requires **NetBox 4.5.10 or a later 4.5 release** and **Python 3.12 or later** in the NetBox environment. The Python distribution is `nbCableEditor`. Add `nbcableeditor` in the NetBox configuration to enable **Cable Editor** under `/plugins/nbcableeditor/`.
 
 ## Install on an existing NetBox instance
 
@@ -40,13 +40,13 @@ If you use NetBox's `upgrade.sh` workflow, add a persistent path to the plugin p
 
 Build the plugin into a custom image and use that image for both the NetBox web service and its workers. The Compose file under `dev/` runs the local demo.
 
-1. Place the `nbCableEditor` directory in the build context of your NetBox Docker deployment. Use the following example in your Dockerfile. Choose a supported NetBox base image that matches your Compose configuration. The demo uses the image shown here.
+1. Place the `nbCableEditor` directory in the build context of your NetBox Docker deployment. The example updates the base image to Django 5.2.19, which includes the November 2026 security fixes. Check the Django security advisories when choosing the patch version. [Django 5.2.19 security release](https://www.djangoproject.com/weblog/2026/nov/03/security-releases/)
 
    ```dockerfile
    FROM ghcr.io/netbox-community/netbox:v4.5.10
    COPY ./nbCableEditor/pyproject.toml ./nbCableEditor/README.md /tmp/nbCableEditor/
    COPY ./nbCableEditor/nbcableeditor/ /tmp/nbCableEditor/nbcableeditor/
-   RUN /usr/local/bin/uv pip install --python /opt/netbox/venv/bin/python /tmp/nbCableEditor
+   RUN /usr/local/bin/uv pip install --python /opt/netbox/venv/bin/python Django==5.2.19 /tmp/nbCableEditor
    ```
 
 2. Add `"nbcableeditor"` to the `PLUGINS` list loaded by the containers. NetBox Docker typically uses `configuration/plugins.py`.
@@ -60,6 +60,14 @@ Build the plugin into a custom image and use that image for both the NetBox web 
 3. Apply the migrations and collect the static assets again. Keep the existing plugin configuration.
 4. Restart NetBox and its workers, or recreate the containers. Open a rack and device type with existing data to check that cables and port positions appear as expected.
 
+## Production security
+
+- Use a compatible NetBox release with current security fixes for NetBox and its dependencies. Check the Django version in the deployed environment. A NetBox release can ship with a Django patch level that predates a security advisory. [NetBox releases](https://github.com/netbox-community/netbox/releases) · [Django security releases](https://docs.djangoproject.com/en/5.2/releases/security/)
+- Keep `DEBUG = False` and `LOGIN_REQUIRED = True`. Leave `EXEMPT_VIEW_PERMISSIONS` empty unless you deliberately grant broader read access. Use specific `ALLOWED_HOSTS` and keep the production `SECRET_KEY`, database credentials, and API token peppers in your production secret store. The Compose stack under `dev/` contains public demo credentials. [NetBox security settings](https://netboxlabs.com/docs/netbox/configuration/security/) · [Django deployment checklist](https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/)
+- Serve NetBox over HTTPS with `SESSION_COOKIE_SECURE = True` and `CSRF_COOKIE_SECURE = True`. Have the trusted reverse proxy overwrite forwarded protocol and identity headers, restrict direct access to the application server, and honor `Cache-Control: private, no-store` on editor responses. Run `manage.py check --deploy` using the production settings. [Django deployment checklist](https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/)
+- The editor's JSON endpoints accept bodies up to 512 KiB, or less if NetBox sets a lower `DATA_UPLOAD_MAX_MEMORY_SIZE`. Enforce a matching limit on those endpoints at the proxy to reject oversized bodies before the application server buffers them. [Django guidance on request body limits](https://docs.djangoproject.com/en/5.2/ref/settings/#data-upload-max-memory-size)
+- The editor includes image URLs only for artwork the user is allowed to see. Direct requests to NetBox media follow the policies of your NetBox media server or storage backend. Apply access control there when device or module images are sensitive, including to direct `/media/` requests and storage URLs. [Django guidance on uploaded media](https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/#media-root-and-media-url)
+
 ## Configure VLAN colors
 
 The migration adds the optional text field `editorColorHex` to the NetBox **IPAM → VLAN** object type. Open a VLAN and enter a hex color such as `#16A34A` under **Edit → Cable Editor color**. Each VLAN object has its own color, including when the same VLAN ID appears in several groups. Rolling back the plugin migration preserves the field and its values.
@@ -72,15 +80,15 @@ The editor respects NetBox object permissions and any object filters.
 
 | Task | Required NetBox permissions |
 | --- | --- |
-| View the rack | **View** on the rack, visible devices, and their ports. The device model in connection details and the layout link in the interface directory also require **View** on the corresponding device type. |
+| View the rack | **View** on the rack, visible devices, and their ports. Device artwork, model labels, and layout links require **View** on the corresponding device type. Port positions also require **View** on their component templates. |
 | View cables and VLAN data | **View** on the relevant cables and VLANs. A cable trace shows the points the user has permission to view. |
 | View a port layout | **View** on the device type or module type and on the interface, front port, rear port, and module bay templates it uses. |
 | Save a port layout | Also requires **Change** on the device type or module type. |
-| Review and import a built-in device type template | **View** and **Change** on the corresponding device type, plus the template-component permissions needed by the layout editor. |
+| Review and import a built-in device type template | **View** and **Change** on the corresponding device type, plus the template-component permissions needed by the layout editor. Manufacturer names and search require **View** on the manufacturer. |
 | Change global editor settings | Superuser or **Change** on the **Cable Editor → Cable Editor settings** object type. Settings are shared across the NetBox instance. |
 | View installed modules in the rack | **View** on module bays, module bay templates, modules, and module types. Module type images also require **View** on the relevant image attachments. |
 | Create, move, or delete a cable | **Add**, **Change**, or **Delete** on the native NetBox cable object, according to the action. The user also needs access to the devices and ports at both ends. |
-| Restore a history entry | The permissions required for the corresponding cable operations. History is stored per user and rack. |
+| Restore a history entry | The current permissions required for the corresponding cable operations, including **View** on any related objects being reassigned. History is stored per user and rack. |
 
 ## Troubleshooting
 

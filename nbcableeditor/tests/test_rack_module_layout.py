@@ -14,6 +14,7 @@ class RackModuleLayoutTestCase(TestCase):
     user_permissions = (
         "dcim.view_rack", "dcim.view_device", "dcim.view_devicetype", "dcim.view_interface",
         "dcim.view_module", "dcim.view_moduletype", "dcim.view_modulebay", "dcim.view_modulebaytemplate",
+        "dcim.view_interfacetemplate",
     )
 
     def test_nested_module_projects_the_installed_ports_and_device_labels(self):
@@ -76,6 +77,11 @@ class RackModuleLayoutTestCase(TestCase):
         self.assertEqual(subcard_items[1]["label"], {
             "text": "Test chassis · Slot 3/2", "font": "serif", "size": 22, "position": "right",
         })
+
+        self.remove_permissions("dcim.view_interfacetemplate")
+        payload = self.client.get(url).context["rack_data"]["devices"][0]
+        self.assertIsNone(payload["ports"][0]["x"])
+        self.assertIn("module", payload["design"]["front"]["items"][0])
 
         self.remove_permissions("dcim.view_module")
         payload = self.client.get(url).context["rack_data"]["devices"][0]

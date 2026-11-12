@@ -175,8 +175,7 @@ def update_calculator_settings(request, route):
         else:
             messages.error(request, "Unknown calculator action.")
             return {}, redirect(f"{reverse(route)}#cable-calculator")
-        settings.options = {**settings.options, "calculator": config}
-        settings.save(update_fields=["options"])
+        settings.save_options(request.user, {**settings.options, "calculator": config})
     messages.success(request, "Cable Calculator settings saved.")
     query = f"?{urlencode({'calculator_profile': key})}" if key else ""
     return {}, redirect(f"{reverse(route)}{query}#cable-calculator")
