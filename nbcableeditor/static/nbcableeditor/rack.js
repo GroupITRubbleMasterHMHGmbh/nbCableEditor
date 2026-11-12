@@ -6,6 +6,8 @@
 
   const data = JSON.parse(document.getElementById("re-rack-data").textContent);
   const httpUrl = globalThis.NbCableEditorHttpUrl;
+  const savedViewsApi = globalThis.NbCableEditorSavedViews;
+  let savedViews;
   const get = (name) => editor.querySelector("[data-" + name + "]");
   const workspace = get("workspace");
   const viewOptions = get("view-options");
@@ -21,6 +23,22 @@
   const viewPreferences = readViewPreferences(viewPreferencesKey);
   const rackPreferences = readViewPreferences(rackPreferencesKey);
   const viewDefaults = data.settings ?? {};
+  const toolbar = globalThis.NbCableEditorToolbar.create({
+    editor, features: viewDefaults.features, defaults: viewDefaults.toolbarDefaults, labels: viewDefaults.featureLabels,
+  });
+  const enabled = key => toolbar.isEnabled(key);
+  const displayFeatures = {
+    connections: "panels", directory: "panels", trim: "trim", virtualCombine: "virtualCombine",
+    zoom: "zoom", lines: "lines", images: "deviceImages", interfaceHighlight: "interfaceHighlight",
+    routingStrategy: "routingStrategy", portFill: "vlan", vlanColors: "vlan",
+  };
+  const rackFeatures = {
+    face: "rackSides", devices: "devices", hiddenRows: "portRows", cableDevice: "deviceCableFocus",
+    deviceGaps: "gapControls", vlan: "vlan", vlanKind: "vlan",
+  };
+  const listFeatures = {"directory:vlan": "vlan", "directory:peer-vlan": "vlan", "connection:vlan": "vlan"};
+  let originalView;
+  let lineModeChanged = false;
   const defaultDeviceClearance = 25;
   const defaultCableGap = 4.5;
   const defaultHorizontalGap = 5;
@@ -42,9 +60,7 @@
   const baseFaceWidth = baseRackUnit * rackFaceAspect;
   const minFitScale = .25;
   const maxManualScale = 8;
-  const savedGaps = new Map(Object.entries(rackPreferences.deviceGaps ?? {}).filter(
-    ([, size]) => Number.isInteger(size) && size >= 0 && size <= maxGap,
-  ));
+  const savedGaps = new Map();
   const board = get("board");
   const sideReserve = Math.max(0, deviceEdgeClearance - defaultDeviceClearance) + Math.max(0, parallelCableGap - defaultCableGap);
   const endReserve = sideReserve + Math.max(0, extraHorizontalGap - defaultHorizontalGap);
@@ -61,6 +77,13 @@
   const facePanels = Array.from(board.querySelectorAll("[data-rack-face-panel]"));
   const wires = get("wires");
   const lines = get("lines");
+  const connectionFilterApi = globalThis.NbCableEditorConnectionFilter;
+  const connectionFilterOpen = get("connection-filter-open");
+  let connectionFilter;
+  let matchesConnectionFilter;
+  const selectedConnectionsOpen = get("selected-connections-open");
+  const selectedConnectionsDialog = get("selected-connections-dialog");
+  let selectedConnectionIds = new Set();
   const bundlePanel = get("bundle-panel");
   const bundlePairList = get("bundle-groups");
   const bundleCableList = get("bundle-cables");
@@ -89,7 +112,7 @@
   const vlanColorFallback = get("vlan-color-fallback");
   const vlanColorError = get("vlan-color-error");
   const vlanColors = globalThis.NbCableEditorVlanColors;
-  let vlanColorSettings = vlanColors.restore(viewPreferences.vlanColors);
+  let vlanColorSettings;
   const displaySettings = data.settings?.display ?? {};
   const cableDetailFields = new Set(Array.isArray(displaySettings.cableDetailFields) ? displaySettings.cableDetailFields :
     ["status", "type", "profile", "color", "length", "label", "description", "tags", "comments", "trace", "portDetails"]);
@@ -178,13 +201,12 @@
   const filters = new URLSearchParams(location.search);
   const viewFilter = (name) => filters.get(name) ?? (typeof rackPreferences[name] === "string" ? rackPreferences[name] : "");
   const rackFaces = ["front", "rear", "both"];
-  let rackFaceOverride = viewFilter("face");
-  if (!rackFaces.includes(rackFaceOverride)) rackFaceOverride = "";
-  let rackFace = rackFaceOverride || viewDefaults.face || "front";
-  const hiddenRows = new Set(viewFilter("hiddenRows").split(",").filter(id => rowById.has(id)));
-  const requestedDevices = new Set(viewFilter("devices").split(","));
-  const focusedDevices = new Set(data.devices.filter(({id}) => requestedDevices.has(String(id))).map(({id}) => id));
-  let cableFocusDevice = data.devices.find(({id}) => String(id) === viewFilter("cableDevice")) ?? null;
+  let rackFaceOverride;
+  let rackFace;
+  const hiddenRows = new Set();
+  const focusedDevices = new Set();
+  const rackDeviceIds = new Set(data.devices.map(device => device.id));
+  let cableFocusDevice;
   const markers = new Map();
   const directoryRows = [];
   const vlanMatches = new Map();
@@ -457,7 +479,8 @@
   }
 
   function modeAllowed(mode) {
-    return mode === "normal" || (mode === "connect" && data.canAdd) || (mode === "unplug" && data.canDelete);
+    return mode === "normal" || (mode === "connect" && enabled("quickConnect") && data.canAdd) ||
+      (mode === "unplug" && enabled("unplug") && data.canDelete);
   }
 
   function stagedCount() {
@@ -649,12 +672,12 @@
   }
 
   function navigateHistory(target) {
-    if (busy || stagedCount() || target === undefined || target === historyData.cursor) return;
+    if (!enabled("history") || busy || stagedCount() || target === undefined || target === historyData.cursor) return;
     save({action: "history", target, revision: historyData.revision}, historyDialog.open ? historyError : null);
   }
 
   function showHistory() {
-    if (busy) return;
+    if (!enabled("history") || busy) return;
     setError(historyError, stagedCount() ? "Apply or clear the queued changes before restoring a checkpoint." : "");
     const entries = document.createDocumentFragment();
     for (const checkpoint of checkpoints) {
@@ -710,7 +733,7 @@
       control.dataset.gapStep = direction;
       control.setAttribute("aria-label", action + " virtual gap " + location);
       control.addEventListener("click", () => {
-        if (busy || gesture) return;
+        if (!enabled("gapControls") || busy || gesture) return;
         const size = virtualGapSize(gap);
         const next = Math.max(0, Math.min(maxGap, size + gapStep * direction));
         if (next === size) return;
@@ -936,13 +959,12 @@
     applyElevationSpacing();
   }
 
-  function restoreListFields() {
-    const saved = readViewPreferences(listFieldsKey);
+  function restoreListFields(saved = {}) {
     for (const [key, control] of listFields) {
       const [kind, field] = key.split(":");
       const defaults = displaySettings[kind + "Fields"];
-      if (typeof saved[key] === "boolean") control.checked = saved[key];
-      else if (Array.isArray(defaults)) control.checked = defaults.includes(field);
+      control.checked = typeof saved[key] === "boolean" ? saved[key]
+        : Array.isArray(defaults) ? defaults.includes(field) : control.defaultChecked;
     }
   }
 
@@ -963,6 +985,7 @@
       ...endpoint, id: endpoint.portId, name: endpoint.portName, url: endpoint.portUrl,
       device: {
         name: endpoint.deviceName, deviceType: endpoint.deviceType,
+        deviceTypeId: endpoint.deviceTypeId, filterDeviceId: endpoint.filterDeviceId,
         rackName: endpoint.rackName, url: endpoint.deviceUrl,
       },
     };
@@ -1024,6 +1047,7 @@
   }
 
   function openVlanColorSettings() {
+    if (!enabled("vlan")) return;
     hideWireTooltip();
     viewOptions.open = false;
     vlanColorRows.replaceChildren();
@@ -1037,6 +1061,7 @@
 
   function saveVlanColorSettings(event) {
     event.preventDefault();
+    if (!enabled("vlan")) return;
     const rules = [];
     for (const row of vlanColorRows.children) {
       const ids = row.querySelector("[data-vlan-color-ids]");
@@ -1197,6 +1222,111 @@
     return cable.label || "Cable #" + cable.id;
   }
 
+  function availableSelectedConnections() {
+    return [...selectedConnectionIds].filter(id => cables.has(id));
+  }
+
+  function updateSelectedConnectionControls() {
+    selectedConnectionsOpen.hidden = lines.value !== "selected";
+    const count = availableSelectedConnections().length;
+    selectedConnectionsOpen.textContent = count ? "Choose connections (" + count + ")…" : "Choose connections…";
+  }
+
+  function setSelectedConnections(ids, {redraw = true, preserveUnavailable = false} = {}) {
+    selectedConnectionIds = new Set((Array.isArray(ids) ? ids : []).filter(id =>
+      Number.isSafeInteger(id) && id > 0 && (preserveUnavailable || cables.has(id))));
+    updateSelectedConnectionControls();
+    if (redraw) {
+      drawnMode = null;
+      invalidateRoutes();
+    }
+  }
+
+  function saveSelectedConnections(ids) {
+    const unavailable = [...selectedConnectionIds].filter(id => !cables.has(id));
+    setSelectedConnections([...ids, ...unavailable], {preserveUnavailable: true});
+    saveRackPreferences();
+  }
+
+  function openSelectedConnections() {
+    if (!enabled("selectedConnections") || busy || pending) return;
+    hideWireTooltip();
+    const draft = new Set(availableSelectedConnections());
+    const form = node("form", "re-rack-dialog-body");
+    form.method = "dialog";
+    const title = node("h2", "re-rack-dialog-title", "Connections to show");
+    title.id = "re-rack-selected-connections-title";
+    const query = node("input", "form-control form-control-sm");
+    query.type = "search";
+    query.placeholder = "Search by cable, device or port";
+    query.setAttribute("aria-label", "Search connections");
+    const choices = node("div", "re-rack-device-options");
+    choices.setAttribute("role", "group");
+    choices.setAttribute("aria-labelledby", title.id);
+    const count = node("p", "text-secondary small mb-0");
+    count.setAttribute("role", "status");
+    const entries = [...cables.values()].map(cable => {
+      const ends = ["A", "B"].map(end => listEndpointName(cableEndpoint(cable, end))).join(" ↔ ");
+      const label = node("label", "form-check");
+      const checkbox = node("input", "form-check-input");
+      checkbox.type = "checkbox";
+      checkbox.checked = draft.has(cable.id);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) draft.add(cable.id);
+        else draft.delete(cable.id);
+        updateCount();
+      });
+      const caption = node("span", "form-check-label", cableName(cable));
+      caption.append(node("span", "d-block text-secondary small", ends));
+      label.append(checkbox, caption);
+      choices.append(label);
+      return {label, checkbox, text: normalizeConnectionSearch(cableName(cable) + " #" + cable.id + " " + ends)};
+    });
+    const empty = node("p", "text-secondary small mb-0", "No matching connections.");
+    choices.append(empty);
+    const actions = node("div", "re-rack-dialog-actions");
+    const clear = button("btn btn-outline-secondary btn-sm", "Clear selection");
+    const cancelChoice = button("btn btn-outline-secondary btn-sm", "Cancel");
+    const apply = button("btn btn-primary btn-sm", "Apply selection");
+    apply.type = "submit";
+
+    function updateCount() {
+      count.textContent = draft.size + " selected";
+      clear.disabled = !draft.size;
+    }
+
+    function filterChoices() {
+      const terms = normalizeConnectionSearch(query.value).trim().split(/\s+/);
+      let hasMatches = false;
+      for (const {label, text} of entries) {
+        label.hidden = !terms.every(term => text.includes(term));
+        hasMatches ||= !label.hidden;
+      }
+      empty.hidden = hasMatches;
+    }
+
+    clear.addEventListener("click", () => {
+      draft.clear();
+      for (const {checkbox} of entries) checkbox.checked = false;
+      updateCount();
+      query.focus();
+    });
+    cancelChoice.addEventListener("click", () => selectedConnectionsDialog.close());
+    query.addEventListener("input", filterChoices);
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      saveSelectedConnections([...draft]);
+      selectedConnectionsDialog.close();
+    });
+    actions.append(clear, cancelChoice, apply);
+    form.append(title, query, count, choices, actions);
+    selectedConnectionsDialog.replaceChildren(form);
+    filterChoices();
+    updateCount();
+    selectedConnectionsDialog.showModal();
+    query.focus();
+  }
+
   function canMove(cable) {
     return !!(data.canChange && cable?.editable && ports.has(cable.a) && ports.has(cable.b));
   }
@@ -1277,6 +1407,7 @@
   }
 
   function vlanId() {
+    if (!enabled("vlan")) return null;
     const text = vlanQuery.value.trim();
     const vid = Number(text);
     return /^\d{1,4}$/.test(text) && vid >= 1 && vid <= 4094 ? vid : null;
@@ -1303,7 +1434,10 @@
       const b = vlanMatches.get(cable.b);
       const match = a && b && a !== b ? "both" : a || b;
       markVlanMatch(row, match, row.querySelector(".re-rack-vlan-badge"), vid);
-      if (vid === null || match) connectionScope.add(id);
+      if ((vid === null || match) && (lines.value !== "filtered" ||
+          matchesConnectionFilter(cable, cableEndpoint(cable, "A"), cableEndpoint(cable, "B")))) {
+        connectionScope.add(id);
+      }
     }
     applyConnectionSearch();
     if (exportDialog.open && !exporting) updateExportOptions();
@@ -1500,7 +1634,7 @@
 
   async function exportRackPlan(event) {
     event.preventDefault();
-    if (exporting) return;
+    if (!enabled("export") || exporting) return;
     const png = exportFormat.value === "png";
     const longest = exportLongestEdge();
     const paper = get("export-paper").value;
@@ -1596,6 +1730,9 @@
     if (lines.value === "bundles") {
       drawnMode = null;
       scheduleDraw();
+    } else if (lines.value === "filtered") {
+      drawnMode = null;
+      invalidateRoutes();
     }
     persistViewFilters();
   }
@@ -1727,6 +1864,7 @@
   }
 
   function appendShowSide(container, portId, cable) {
+    if (!enabled("rackSides")) return;
     const port = ports.get(portId);
     const face = rackSideOfPort(portId);
     if (!port || !face || rackFaceVisible(face) || !deviceInFocus(port.device.id) || !portRowVisible(portId)) return;
@@ -1987,7 +2125,7 @@
     const values = [];
     if (show("type")) values.push(["Port type", port.type || nativePortKind(port) || "Not set"]);
     if (!nativePortKind(port)) {
-      if (show("vlan")) values.push(
+      if (enabled("vlan") && show("vlan")) values.push(
         ["Untagged VLAN", port.untaggedVlan ? vlanChip(port.untaggedVlan, true) : "None shown"],
         ["Tagged VLANs", cableDetailTaggedVlans(port)],
         ["VLAN mode", port.vlanModeDisplay || port.vlanMode || "Not set"],
@@ -2152,6 +2290,10 @@
         if (["label", "color", "length", "length_unit", "description", "tags"].some(key => Object.hasOwn(patch, key))) {
           drawCableList();
           updateCableDetail();
+        }
+        if (lines.value === "filtered") {
+          drawnMode = null;
+          invalidateRoutes();
         }
         if (Object.hasOwn(patch, "color")) {
           drawDirectory();
@@ -2401,6 +2543,15 @@
     if (cable) {
       if (menu.querySelector("[role=menuitem]")) divider();
       if (normal) {
+        if (lines.value === "selected") {
+          const selected = selectedConnectionIds.has(cable.id);
+          add(selected ? "Remove from selected connections" : "Add to selected connections", () => {
+            const next = new Set(availableSelectedConnections());
+            if (selected) next.delete(cable.id);
+            else next.add(cable.id);
+            saveSelectedConnections([...next]);
+          });
+        }
         add("Cable details", () => openCableDetails(cable));
         if (data.canChange && cable.editable) {
           add("Edit cable…", () => openCableEdit(cable));
@@ -2666,7 +2817,7 @@
     traceDevices.clear();
     tracePoints = [];
     traceLayer.replaceChildren();
-    if (!cable) return;
+    if (!cable || !cablePassesLineFilter(cable.id)) return;
     const traces = cableTraces(cable).filter(([direction]) => !end || direction === end);
 
     const seen = new Set([cable.id]);
@@ -2715,6 +2866,7 @@
       for (const segment of trace.segments) {
         if (seen.has(segment.id)) continue;
         seen.add(segment.id);
+        if (!cablePassesLineFilter(segment.id)) continue;
         mark(segment.a);
         mark(segment.b);
         const visible = visibleCablePath(segment);
@@ -2744,6 +2896,7 @@
 
   function highlightCable(cable, port = null, end = null) {
     if (cable && !cableMatchesDevice(cable)) return;
+    if (cable && !cablePassesLineFilter(cable.id)) cable = null;
     if (cable === hoveredCable && port === hoveredPort) {
       if (end !== hoverEnd) {
         hoverEnd = end;
@@ -3026,12 +3179,15 @@
       panel.append(heading);
     }
     const fields = node("dl", "re-rack-tooltip-port-fields");
-    for (const [label, value] of [
+    const values = [
       ["Type", port.type || nativePortKind(port) || "Not set"],
       ["PoE", portPoeText(port)],
+    ];
+    if (enabled("vlan")) values.push(
       ["Untagged", port.untaggedVlan ? vlanChip(port.untaggedVlan, true) : "None"],
       ["Tagged", tooltipTaggedVlans(port)],
-    ]) {
+    );
+    for (const [label, value] of values) {
       const row = node("div");
       const detail = node("dd");
       detail.append(value);
@@ -3099,7 +3255,8 @@
     }
     const candidate = inventoryHidden ? null : listedCable ?? (port ? cables.get(port.cableId) : cableAt(event));
     const group = expandedBundle && bundleGroups.find(item => item.key === expandedBundle);
-    const cable = candidate && cableMatchesDevice(candidate) && (!group || group.ids.includes(candidate.id)) ? candidate : null;
+    const cable = candidate && cableMatchesDevice(candidate) && (!group || group.ids.includes(candidate.id)) &&
+      cablePassesLineFilter(candidate.id) ? candidate : null;
     if (!port && !cable) return null;
     const key = port ? "port:" + port.id : (listedCable ? "list:" : "wire:") + cable.id;
     return {port, cable, listedCable, key};
@@ -3474,16 +3631,32 @@
     return changed;
   }
 
+  function effectiveLineMode() {
+    return cableFocusDevice && lines.value === "none" ? "all" : lines.value;
+  }
+
+  function cablePassesLineFilter(id) {
+    return lines.value !== "filtered" || connectionScope.has(id);
+  }
+
+  function cableLineVisible(cable, mode) {
+    if (mode === "all") return true;
+    if (mode === "filtered") return connectionScope.has(cable.id);
+    return cable === selectedCable || (mode === "selected" && selectedConnectionIds.has(cable.id));
+  }
+
   function routeVisibleCables() {
     const strategy = board.dataset.routingStrategy;
+    const mode = effectiveLineMode();
+    const acceptsCable = cable => cableMatchesDevice(cable) && cablePassesLineFilter(cable.id);
     const combine = editor.dataset.planView !== "plan" && viewVirtualCombine.checked &&
-      (lines.value === "all" || cableFocusDevice);
+      (mode === "all" || mode === "selected" || mode === "filtered");
     const tubeCandidates = [];
     let visibleCount = 0;
     for (const cable of cables.values()) {
-      if (!cableMatchesDevice(cable) || !visibleMarker(cable.a) || !visibleMarker(cable.b)) continue;
+      if (!acceptsCable(cable) || !visibleMarker(cable.a) || !visibleMarker(cable.b)) continue;
       visibleCount++;
-      if (combine) tubeCandidates.push({id: cable.id, a: {port: cable.a}, b: {port: cable.b}});
+      if (combine && cableLineVisible(cable, mode)) tubeCandidates.push({id: cable.id, a: {port: cable.a}, b: {port: cable.b}});
     }
     const plannedCount = rackPlan?.lineOperations().filter(cable =>
       cableMatchesDevice(cable) && visibleMarker(cable.a) && visibleMarker(cable.b)).length ?? 0;
@@ -3497,7 +3670,7 @@
       spacingChanged = true;
     }
     if (spacingChanged) applyElevationSpacing();
-    const job = measureRouting(cableMatchesDevice, strategy);
+    const job = measureRouting(acceptsCable, strategy);
     const {connections, obstacles, bounds, protectedAreas, portRects, spacing, horizontalSpacing, deviceClearance} = job;
     const key = JSON.stringify([connections, obstacles, bounds, protectedAreas, strategy, spacing, horizontalSpacing, deviceClearance]);
     if (key !== geometryKey) {
@@ -3536,6 +3709,7 @@
     if (busy || pending || gesture || expandedBundle === key) return;
     const focusKey = key ?? expandedBundle;
     expandedBundle = key;
+    saveRackPreferences();
     drawnMode = null;
     selectCable(null);
     if (focusPanel) {
@@ -3722,13 +3896,14 @@
     const group = drawBundles(mode);
     const individualIds = new Set(group?.ids);
     const visibleRoutes = new Map([...routes].filter(([id]) => mode === "bundles"
-      ? individualIds.has(id) : mode === "all" || id === selectedCable?.id));
+      ? individualIds.has(id) : cableLineVisible(cables.get(id), mode)));
+    const restrictedMode = mode === "selected" || mode === "filtered";
     const stubCandidates = mode === "bundles"
       ? group ? [] : Array.from(connectionScope, id => cables.get(id))
-      : cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
+      : restrictedMode || cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
     const stubs = new Map();
     for (const cable of stubCandidates) {
-      if (!cableMatchesDevice(cable) || routes.has(cable.id)) continue;
+      if (!cableMatchesDevice(cable) || routes.has(cable.id) || (restrictedMode && !cableLineVisible(cable, mode))) continue;
       const shape = visibleCablePath(cable);
       if (shape?.stub) stubs.set(cable.id, shape);
     }
@@ -3770,7 +3945,7 @@
       const stroke = wire(path, "re-rack-wire" + style, color);
       stroke.dataset.wireVisual = id;
       const strokes = cableStrokes(stroke, color, id);
-      if (cableFocusDevice || mode === "bundles") {
+      if (cableFocusDevice || mode === "bundles" || restrictedMode) {
         const hit = wire(path, "re-rack-wire-hit");
         hit.dataset.wire = id;
         shownRoutes.set(id, visible.points);
@@ -3855,7 +4030,7 @@
       scroll.scrollLeft += rect.left + rect.width * view.anchor.x - view.point.x;
       scroll.scrollTop += rect.top + rect.height * view.anchor.y - view.point.y;
     }
-    const mode = lines.value === "bundles" ? "bundles" : cableFocusDevice ? "all" : lines.value;
+    const mode = effectiveLineMode();
     if (routes !== drawnRoutes || mode !== drawnMode || selectedCable !== drawnSelection) {
       drawCablePaths(mode);
       drawnRoutes = routes;
@@ -4075,10 +4250,8 @@
       history.replaceState({...history.state, reRackEditor: {
         left: scroll.scrollLeft,
         top: scroll.scrollTop,
-        zoom: zoomPreference(),
-        lines: lines.value,
-        offImage: offImage.checked,
-        search: search.value,
+        viewId: savedViews.activeId,
+        viewSettings: captureRackView(),
         message,
         queue,
       }}, "");
@@ -4195,8 +4368,8 @@
     if (Array.from(control.options).some(option => option.value === value)) control.value = value;
   }
 
-  function saveViewPreferences(...keys) {
-    const values = {
+  function displayPreferences() {
+    return {
       connections: viewConnections.checked, directory: viewDirectory.checked, trim: viewTrim.checked,
       virtualCombine: viewVirtualCombine.checked,
       connectionsOpen: connectionsSection.open, directoryOpen: directorySection.open,
@@ -4207,18 +4380,56 @@
         fallback: vlanColorSettings.fallback,
       },
     };
+  }
+
+  function retainLockedPreferences(values, original = {}, features) {
+    for (const [key, feature] of Object.entries(features)) {
+      if (enabled(feature)) continue;
+      if (Object.hasOwn(original, key)) values[key] = original[key];
+      else delete values[key];
+    }
+    return values;
+  }
+
+  function saveViewPreferences(...keys) {
+    if (savedViews?.activeId != null) return;
+    const values = displayPreferences();
+    keys = keys.filter(key => !displayFeatures[key] || enabled(displayFeatures[key]));
     writeViewPreferences(viewPreferencesKey, {
       ...readViewPreferences(viewPreferencesKey), ...Object.fromEntries(keys.map(key => [key, values[key]])),
     });
   }
 
-  function saveRackPreferences() {
-    writeViewPreferences(rackPreferencesKey, {
-      face: rackFaceOverride, devices: Array.from(focusedDevices).join(","), hiddenRows: Array.from(hiddenRows).join(","),
+  function rackViewPreferences(face = rackFaceOverride) {
+    return retainLockedPreferences({
+      face, devices: Array.from(focusedDevices).join(","), hiddenRows: Array.from(hiddenRows).join(","),
       cableDevice: cableFocusDevice ? String(cableFocusDevice.id) : "",
       vlan: vlanQuery.value, vlanKind: vlanKind.value, search: search.value, offImage: offImage.checked,
       connectionSearch: connectionSearch.value,
       deviceGaps: Object.fromEntries(savedGaps),
+      expandedBundle,
+    }, originalView.rack, rackFeatures);
+  }
+
+  function captureRackView({effectiveFace = false} = {}) {
+    const display = retainLockedPreferences(displayPreferences(), originalView.display, displayFeatures);
+    const originalLines = originalView.display?.lines;
+    if (!lineModeChanged && !lineModeAllowed(originalLines)) display.lines = originalLines;
+    const fields = Object.fromEntries(Array.from(listFields, ([key, control]) => [key, control.checked]));
+    return {
+      display,
+      rack: rackViewPreferences(effectiveFace ? rackFace : rackFaceOverride),
+      listFields: retainLockedPreferences(fields, originalView.listFields, listFeatures),
+      selectedConnections: [...selectedConnectionIds],
+      connectionFilter,
+      toolbar: toolbar.snapshot(),
+    };
+  }
+
+  function saveRackPreferences() {
+    if (savedViews?.activeId != null) return;
+    writeViewPreferences(rackPreferencesKey, {
+      ...rackViewPreferences(), selectedConnections: [...selectedConnectionIds], connectionFilter,
     });
   }
 
@@ -4406,11 +4617,12 @@
   }
 
   function updateDeviceFilter() {
-    const count = focusedDevices.size;
+    const count = data.devices.filter(device => focusedDevices.has(device.id)).length;
+    const focused = focusedDevices.size > 0;
     const total = data.devices.length;
-    deviceSummary.textContent = count ? "Devices: " + count + " of " + total : "Devices: All";
-    deviceReset.hidden = !count;
-    deviceStatus.textContent = count
+    deviceSummary.textContent = focused ? "Devices: " + count + " of " + total : "Devices: All";
+    deviceReset.hidden = !focused;
+    deviceStatus.textContent = focused
       ? "Showing " + count + " of " + total + " devices."
       : (total ? "Showing all " + total + " devices." : "No visible devices.");
   }
@@ -4497,20 +4709,17 @@
   }
 
   function persistViewFilters() {
+    if (savedViews?.activeId != null) return;
     const url = new URL(location.href);
-    if (focusedDevices.size) url.searchParams.set("devices", Array.from(focusedDevices).join(","));
-    else url.searchParams.delete("devices");
-    if (cableFocusDevice) url.searchParams.set("cableDevice", cableFocusDevice.id);
-    else url.searchParams.delete("cableDevice");
-    if (hiddenRows.size) url.searchParams.set("hiddenRows", Array.from(hiddenRows).sort().join(","));
-    else url.searchParams.delete("hiddenRows");
-    if (rackFaceOverride) url.searchParams.set("face", rackFaceOverride);
-    else url.searchParams.delete("face");
-    const vid = vlanId();
-    if (vid === null) url.searchParams.delete("vlan");
-    else url.searchParams.set("vlan", vid);
-    if (vlanKind.value === "any") url.searchParams.delete("vlanKind");
-    else url.searchParams.set("vlanKind", vlanKind.value);
+    for (const [key, value] of Object.entries({
+      devices: [...focusedDevices].join(","), cableDevice: cableFocusDevice?.id,
+      hiddenRows: [...hiddenRows].sort().join(","), face: rackFaceOverride,
+      vlan: vlanId(), vlanKind: vlanKind.value === "any" ? "" : vlanKind.value,
+    })) {
+      if (!enabled(rackFeatures[key])) continue;
+      if (value) url.searchParams.set(key, value);
+      else url.searchParams.delete(key);
+    }
     history.replaceState(history.state, "", url);
     saveRackPreferences();
   }
@@ -4538,7 +4747,7 @@
   }
 
   function applyRackFace(face) {
-    if (busy || face === rackFace || !rackFaces.includes(face)) return;
+    if (!enabled("rackSides") || busy || face === rackFace || !rackFaces.includes(face)) return;
     const top = scroll.scrollTop;
     rackFace = face;
     rackFaceOverride = face;
@@ -4572,20 +4781,21 @@
     cableFocusClear.hidden = !cableFocusDevice;
     cableFocusClear.textContent = cableFocusDevice ? "Cables: " + cableFocusDevice.name + " ×" : "";
     for (const option of lines.options) {
-      if (option.value === "selected" || option.value === "none") option.disabled = Boolean(cableFocusDevice);
+      option.hidden = !lineModeAllowed(option.value);
+      option.disabled = option.hidden || (option.value === "none" && Boolean(cableFocusDevice));
     }
-    lines.title = cableFocusDevice ? "Device focus shows all matching cables or bundles" : "";
+    lines.title = cableFocusDevice ? "Clear device cable focus to hide all lines" : "";
   }
 
   function updateRoutingStyle() {
     const bundled = lines.value === "bundles";
     board.dataset.routingStrategy = bundled ? "pcb" : routingStrategy.value;
-    routingStrategy.disabled = bundled;
+    routingStrategy.disabled = bundled || !enabled("routingStrategy");
     routingStrategy.title = bundled ? "Expanded bundles use PCB-style routing" : "";
   }
 
   function setCableFocus(device) {
-    if (busy || pending || device === cableFocusDevice) return;
+    if (!enabled("deviceCableFocus") || busy || pending || device === cableFocusDevice) return;
     const previousDevice = cableFocusDevice;
     const restoreFocus = document.activeElement === cableFocusClear;
     cableFocusDevice = device;
@@ -4604,67 +4814,198 @@
     }
   }
 
+  function lineModeAllowed(mode) {
+    return (mode !== "selected" || enabled("selectedConnections")) &&
+      (mode !== "filtered" || enabled("connectionFilter"));
+  }
+
+  function restoreDisplayPreferences(display = {}) {
+    const value = key => (displayFeatures[key] && !enabled(displayFeatures[key]) ? undefined : display[key]) ?? viewDefaults[key];
+    viewConnections.checked = value("connections") !== false;
+    viewDirectory.checked = value("directory") !== false;
+    viewTrim.checked = enabled("trim") && value("trim") === true;
+    viewVirtualCombine.checked = enabled("virtualCombine") && value("virtualCombine") === true;
+    connectionsSection.open = display.connectionsOpen !== false;
+    directorySection.open = display.directoryOpen !== false;
+    viewportZoom = null;
+    zoom.selectedIndex = 0;
+    restoreZoom(value("zoom"));
+    for (const [control, key] of [[routingStrategy, "routingStrategy"],
+      [interfaceHighlight, "interfaceHighlight"], [deviceImages, "images"]]) {
+      control.selectedIndex = 0;
+      restoreSelect(control, value(key));
+    }
+    lines.value = "all";
+    const preferredLines = value("lines");
+    if (lineModeAllowed(viewDefaults.lines)) restoreSelect(lines, viewDefaults.lines);
+    if (lineModeAllowed(preferredLines)) restoreSelect(lines, preferredLines);
+    portFill.value = "status";
+    if (enabled("vlan")) restoreSelect(portFill, value("portFill"));
+    vlanColorSettings = vlanColors.restore(display.vlanColors);
+  }
+
+  function setConnectionFilter(tree) {
+    connectionFilter = tree ?? connectionFilterApi.empty();
+    matchesConnectionFilter = connectionFilterApi.compile(connectionFilter, {vlan: enabled("vlan")});
+  }
+
+  function restoreRackView(settings) {
+    originalView = settings;
+    lineModeChanged = false;
+    restoreDisplayPreferences(settings.display);
+    const rack = settings.rack ?? {};
+    const shared = savedViews?.activeId != null;
+    rackFaceOverride = enabled("rackSides") && rackFaces.includes(rack.face) ? rack.face : "";
+    rackFace = enabled("rackSides") ? rackFaceOverride || viewDefaults.face || "front" : "front";
+    focusedDevices.clear();
+    if (enabled("devices")) {
+      for (const id of String(rack.devices ?? "").split(",").map(Number)) {
+        if (Number.isSafeInteger(id) && id > 0 && (shared || rackDeviceIds.has(id))) focusedDevices.add(id);
+      }
+    }
+    const cableDeviceId = enabled("deviceCableFocus") ? Number(rack.cableDevice) : 0;
+    cableFocusDevice = data.devices.find(device => device.id === cableDeviceId) ??
+      (shared && Number.isSafeInteger(cableDeviceId) && cableDeviceId > 0
+        ? {id: cableDeviceId, name: "Unavailable device"} : null);
+    hiddenRows.clear();
+    if (enabled("portRows")) {
+      for (const id of String(rack.hiddenRows ?? "").split(",")) {
+        if (rowById.has(id) || (shared && /^[1-9]\d*:(front|rear):[1-9]\d*$/.test(id))) hiddenRows.add(id);
+      }
+    }
+    savedGaps.clear();
+    if (enabled("gapControls")) {
+      for (const [key, size] of Object.entries(rack.deviceGaps ?? {})) {
+        if (Number.isInteger(size) && size >= 0 && size <= maxGap) savedGaps.set(key, size);
+      }
+    }
+    expandedBundle = typeof rack.expandedBundle === "string" ? rack.expandedBundle : null;
+    vlanQuery.value = enabled("vlan") ? rack.vlan ?? "" : "";
+    vlanKind.value = "any";
+    if (enabled("vlan")) restoreSelect(vlanKind, rack.vlanKind);
+    search.value = rack.search ?? "";
+    offImage.checked = rack.offImage === true;
+    connectionSearch.value = rack.connectionSearch ?? "";
+    restoreListFields(settings.listFields);
+    setSelectedConnections(settings.selectedConnections, {redraw: false, preserveUnavailable: shared});
+    setConnectionFilter(settings.connectionFilter);
+    applyToolbarVisibility(settings.toolbar);
+  }
+
+  function applyToolbarVisibility(preferences) {
+    toolbar.apply(preferences);
+    const quickFeature = {connect: "quickConnect", unplug: "unplug"}[quickMode];
+    if (quickFeature && !toolbar.isVisible(quickFeature)) changeQuickMode("normal");
+    rackPlan?.toolbarChanged();
+  }
+
+  function renderRackView() {
+    board.toggleAttribute("data-virtual-combine", viewVirtualCombine.checked);
+    board.dataset.imageMode = deviceImages.value;
+    editor.dataset.interfaceHighlightMode = interfaceHighlight.value;
+    applyPortFill();
+    applyViewOptions();
+    updateRoutingStyle();
+    updateCableFocusControls();
+    connectionFilterOpen.hidden = lines.value !== "filtered";
+    updateSelectedConnectionControls();
+    for (const input of deviceOptions.querySelectorAll('input[type="checkbox"]')) {
+      input.checked = focusedDevices.has(Number(input.value));
+    }
+    updateDeviceFilter();
+    updateRackFace();
+    drawElevations();
+    renderPortRows();
+    refreshVlanMatches();
+    drawDirectory();
+    drawCableList();
+    updateCableDetail();
+    refreshQuickView();
+  }
+
+  function applySavedRackView(settings) {
+    clearTimeout(zoomPreferenceTimer);
+    zoomPreferenceTimer = null;
+    clearViewInteraction();
+    quickSource = null;
+    closeContextMenu();
+    restoreRackView(settings);
+    renderRackView();
+    setZoom();
+    persistViewFilters();
+  }
+
+  function canChangeSavedView() {
+    if (!busy && !pending && !stagedCount()) return true;
+    announce("Finish or clear the pending cable changes before changing views.", true);
+    return false;
+  }
+
   for (const device of data.devices) {
     for (const port of device.ports) {
       ports.set(port.id, {...port, device});
       portIdsByDataset.set(String(port.id), port.id);
     }
   }
+  restoreRackView({
+    display: {...viewPreferences, images: viewPreferences.images ?? history.state?.reRackDeviceImages},
+    rack: {
+      ...rackPreferences, face: viewFilter("face"), devices: viewFilter("devices"), hiddenRows: viewFilter("hiddenRows"),
+      cableDevice: viewFilter("cableDevice"), vlan: viewFilter("vlan"), vlanKind: viewFilter("vlanKind") || "any",
+    },
+    listFields: readViewPreferences(listFieldsKey),
+    selectedConnections: rackPreferences.selectedConnections,
+    connectionFilter: rackPreferences.connectionFilter,
+  });
+  const restore = history.state?.reRackEditor;
+  savedViews = savedViewsApi.mount({
+    get, config: data.savedViews, capture: captureRackView,
+    apply: applySavedRackView, canSwitch: canChangeSavedView, requestMutation, toolbar, applyToolbarVisibility,
+  });
+  const restoredDraft = restore?.viewId === savedViews.activeId ? restore?.viewSettings : null;
+  const initialView = restoredDraft ?? savedViews.initialSettings;
+  if (initialView) restoreRackView(initialView);
   renderDeviceOptions();
-  renderPortRows();
-  restoreListFields();
-  const viewValue = key => viewPreferences[key] ?? viewDefaults[key];
-  viewConnections.checked = viewValue("connections") !== false;
-  viewDirectory.checked = viewValue("directory") !== false;
-  viewTrim.checked = viewValue("trim") === true;
-  viewVirtualCombine.checked = viewValue("virtualCombine") === true;
-  board.toggleAttribute("data-virtual-combine", viewVirtualCombine.checked);
-  connectionsSection.open = viewPreferences.connectionsOpen !== false;
-  directorySection.open = viewPreferences.directoryOpen !== false;
-  restoreZoom(viewValue("zoom"));
-  restoreSelect(lines, viewValue("lines"));
-  restoreSelect(routingStrategy, viewValue("routingStrategy"));
-  updateRoutingStyle();
-  updateCableFocusControls();
-  restoreSelect(interfaceHighlight, viewValue("interfaceHighlight"));
-  editor.dataset.interfaceHighlightMode = interfaceHighlight.value;
-  restoreSelect(portFill, viewValue("portFill"));
-  applyPortFill();
-  restoreSelect(deviceImages, viewPreferences.images ?? history.state?.reRackDeviceImages ?? viewDefaults.images);
-  board.dataset.imageMode = deviceImages.value;
-  applyViewOptions();
-  vlanQuery.value = viewFilter("vlan");
-  restoreSelect(vlanKind, viewFilter("vlanKind"));
-  search.value = typeof rackPreferences.search === "string" ? rackPreferences.search : "";
-  connectionSearch.value = typeof rackPreferences.connectionSearch === "string" ? rackPreferences.connectionSearch : "";
-  offImage.checked = rackPreferences.offImage === true;
-  updateRackFace();
-  drawElevations();
-  refreshVlanMatches();
-  drawDirectory();
-  drawCableList();
+  renderRackView();
   workspace.hidden = false;
   announce(idleMessage());
-  refreshQuickView();
+  const connectionFilterDialog = connectionFilterApi.createDialog({
+    dialog: get("connection-filter-dialog"),
+    vlan: enabled("vlan"),
+    getCatalog: () => ({cables: cables.values(), devices: data.devices, cableTypes: data.cableTypes, endpoint: cableEndpoint}),
+    getFilter: () => connectionFilter,
+    onApply: tree => {
+      setConnectionFilter(tree);
+      selectCable(null);
+      filterCableList();
+      drawnMode = null;
+      invalidateRoutes();
+      saveRackPreferences();
+    },
+  });
+  connectionFilterOpen.addEventListener("click", () => {
+    if (!enabled("connectionFilter") || busy || pending) return;
+    hideWireTooltip();
+    connectionFilterDialog.open();
+  });
   cableFocusClear.addEventListener("click", () => setCableFocus(null));
 
   for (const choice of faceChoices) {
     choice.addEventListener("click", () => applyRackFace(choice.dataset.rackFaceChoice));
   }
   get("view-reset-defaults").addEventListener("click", () => {
-    if (busy || stagedCount()) {
-      announce("Apply or clear the pending cable changes before resetting the view.");
-      return;
+    if (!canChangeSavedView()) return;
+    const settings = captureRackView();
+    const {vlanColors} = settings.display;
+    settings.display = retainLockedPreferences({vlanColors}, settings.display, displayFeatures);
+    settings.listFields = retainLockedPreferences({}, settings.listFields, listFeatures);
+    if (enabled("rackSides")) settings.rack.face = "";
+    if (savedViews.activeId === null) {
+      writeViewPreferences(viewPreferencesKey, settings.display);
+      writeViewPreferences(listFieldsKey, settings.listFields);
+      history.replaceState({...history.state, reRackDeviceImages: null}, "");
     }
-    const {vlanColors} = readViewPreferences(viewPreferencesKey);
-    writeViewPreferences(viewPreferencesKey, {vlanColors});
-    writeViewPreferences(listFieldsKey, {});
-    rackFaceOverride = "";
-    saveRackPreferences();
-    const url = new URL(location.href);
-    url.searchParams.delete("face");
-    history.replaceState({...history.state, reRackDeviceImages: null, reRackEditor: null}, "", url);
-    location.reload();
+    applySavedRackView(settings);
   });
   for (const control of quickButtons) {
     control.addEventListener("click", () => changeQuickMode(control.dataset.quickMode));
@@ -4746,7 +5087,9 @@
       for (const element of editor.querySelectorAll("[data-" + kind + '-value="' + field + '"]')) {
         element.hidden = !control.checked;
       }
-      writeViewPreferences(listFieldsKey, {...readViewPreferences(listFieldsKey), [key]: control.checked});
+      if (savedViews.activeId === null) {
+        writeViewPreferences(listFieldsKey, {...readViewPreferences(listFieldsKey), [key]: control.checked});
+      }
     });
   }
   vlanQuery.addEventListener("input", applyVlanFilter);
@@ -4794,9 +5137,15 @@
   };
   search.addEventListener("input", changeDirectoryView);
   offImage.addEventListener("change", changeDirectoryView);
+  selectedConnectionsOpen.addEventListener("click", openSelectedConnections);
   lines.addEventListener("change", () => {
-    if (lines.value === "bundles") selectCable(null);
+    if (!enabled("lines") || !lineModeAllowed(lines.value)) return;
+    lineModeChanged = true;
+    if (lines.value === "bundles" || lines.value === "filtered") selectCable(null);
+    updateSelectedConnectionControls();
     updateRoutingStyle();
+    connectionFilterOpen.hidden = lines.value !== "filtered";
+    filterCableList();
     hideWireTooltip();
     applyElevationSpacing();
     invalidateRoutes();
@@ -4858,6 +5207,7 @@
   });
 
   get("export-open").addEventListener("click", () => {
+    if (!enabled("export")) return;
     hideWireTooltip();
     closeContextMenu();
     setError(exportError);
@@ -5074,7 +5424,8 @@
       viewportZoom = {scale: Math.max(minFitScale, Math.min(maxManualScale, scale)), anchor, point};
       invalidateRoutes();
     },
-    canZoom: event => !busy && !pending && (event.type !== "wheel" || (!gesture?.moved && !rackPlan?.isDragging())),
+    canZoom: event => enabled("zoom") && !busy && !pending &&
+      (event.type !== "wheel" || (!gesture?.moved && !rackPlan?.isDragging())),
     canPanFrom: event => !event.target.closest(
       "a, button, input, select, textarea, [data-wire], [data-cable-bundle], [data-wire-sleeve], [data-plan-wire]",
     ) && !wirePortAt(event),
@@ -5125,7 +5476,8 @@
   window.addEventListener("blur", () => rackPlan?.cancelPointer());
 
   window.addEventListener("keydown", (event) => {
-    if ((!gesture?.moved && !rackPlan?.isDragging()) || event.key.toLowerCase() !== "i" || event.isComposing ||
+    if (!enabled("deviceImages") || (!gesture?.moved && !rackPlan?.isDragging()) ||
+        event.key.toLowerCase() !== "i" || event.isComposing ||
         event.ctrlKey || event.altKey || event.metaKey) return;
     event.preventDefault();
     event.stopPropagation();
@@ -5144,9 +5496,7 @@
       if (rackPlan.clear()) event.preventDefault();
       return;
     }
-    if (event.key !== "Escape" || busy ||
-        createDialog.open || editDialog.open || moveDialog.open || detailsDialog.open || historyDialog.open ||
-        exportDialog.open || vlanColorDialog.open || portDialog.open) return;
+    if (event.key !== "Escape" || busy || editor.querySelector("dialog[open]")) return;
     finishPortClick();
     if (quickSource && !gesture?.moved && !source && !pending) {
       event.preventDefault();
@@ -5172,7 +5522,6 @@
     control?.focus({preventScroll: true});
   });
 
-  const restore = history.state?.reRackEditor;
   if (restore) {
     history.replaceState({...history.state, reRackEditor: null}, "");
     if (restore.queue && quickMode !== "normal") {
@@ -5185,20 +5534,14 @@
       preferredSourceDevice = restore.queue.preferredSourceDevice;
       refreshQuickView();
     }
-    restoreZoom(restore.zoom);
-    restoreSelect(lines, restore.lines);
-    offImage.checked = restore.offImage ?? offImage.checked;
-    search.value = restore.search ?? "";
-    filterDirectory();
-    setZoom();
     requestAnimationFrame(() => scroll.scrollTo(restore.left, restore.top));
     if (restore.message) announce(restore.message);
-  } else {
-    setZoom();
   }
+  setZoom();
   saveRackPreferences();
   rackPlan = globalThis.NbCableEditorPlan?.({
     editor, data, ports, portIdsByDataset, cables, get, node, button, httpUrl, requestMutation, describe, setError,
+    planningControlsVisible: () => toolbar.isVisible("planning"),
     refresh: updateMarks,
     redraw: scheduleDraw,
     refreshRoutes: invalidateRoutes,

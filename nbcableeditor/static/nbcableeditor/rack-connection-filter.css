@@ -1,0 +1,94 @@
+.re-connection-filter-dialog {
+  width: min(54rem, calc(100vw - 1.5rem));
+}
+
+.re-connection-filter-tree {
+  max-height: min(64dvh, 40rem);
+  overflow: auto;
+  padding: .15rem;
+}
+
+.re-connection-filter-group,
+.re-connection-filter-children,
+.re-connection-filter-rule,
+.re-connection-filter-rule-fields,
+.re-connection-filter-criteria,
+.re-connection-filter-field {
+  display: grid;
+  gap: .5rem;
+  min-width: 0;
+}
+
+.re-connection-filter-field {
+  gap: .2rem;
+}
+
+.re-connection-filter-group {
+  border-inline-start: 2px solid var(--re-rack-border);
+  padding-inline-start: clamp(.25rem, 1vw, .65rem);
+}
+
+.re-connection-filter-tree > .re-connection-filter-group {
+  border: 0;
+  padding: 0;
+}
+
+.re-connection-filter-rule {
+  border: 1px solid var(--re-rack-border);
+  border-radius: .4rem;
+  padding: .55rem;
+}
+
+.re-connection-filter-header,
+.re-connection-filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .4rem;
+}
+
+.re-connection-filter-fields,
+.re-connection-filter-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  align-items: start;
+  gap: .5rem;
+}
+
+.re-connection-filter-sides > fieldset {
+  border: 1px solid var(--re-rack-border);
+  border-radius: .35rem;
+  padding: .45rem;
+}
+
+.re-connection-filter-sides legend {
+  float: none;
+  width: auto;
+  padding-inline: .3rem;
+}
+
+.re-connection-filter-multi {
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.re-connection-filter-multi[open] {
+  display: grid;
+  gap: .35rem;
+  width: 100%;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .35rem;
+  padding: .4rem;
+}
+
+.re-connection-filter-multi[open] > :not(summary) {
+  margin-top: .35rem;
+}
+
+.re-connection-filter-choices {
+  max-height: 9rem;
+  overflow: auto;
+  padding-inline: .15rem;
+  overflow-wrap: anywhere;
+}

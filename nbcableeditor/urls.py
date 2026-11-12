@@ -5,7 +5,7 @@ from django.contrib.auth.decorators import login_required
 from django.urls import path
 from django.views.decorators.cache import never_cache
 
-from . import cable_views, layout_catalog, plan_views, port_views, views
+from . import cable_views, layout_catalog, plan_views, port_views, saved_views, views
 from .configuration import editor_settings
 
 
@@ -25,6 +25,7 @@ def _editor_path(route, view, kwargs=None, *, name):
 urlpatterns = [
     _editor_path("settings/", editor_settings, name="settings"),
     _editor_path("racks/<int:pk>/", views.rack_editor, name="rack"),
+    _editor_path("racks/<int:pk>/views/", saved_views.rack_saved_views, name="rack-saved-views"),
     _editor_path("racks/<int:pk>/cables/", cable_views.mutate_cable, name="cables"),
     _editor_path("racks/<int:pk>/ports/", port_views.mutate_port, name="ports"),
     _editor_path("racks/<int:pk>/plans/", plan_views.rack_plans, name="plans"),

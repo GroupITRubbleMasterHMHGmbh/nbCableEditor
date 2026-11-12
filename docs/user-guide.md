@@ -5,6 +5,8 @@ Use Cable Editor to find available ports, follow connections, and plan or record
 - [Open the editor](#open-the-editor)
 - [Filter devices, rows, and cables](#filter-devices-rows-and-cables)
 - [Choose the rack view](#choose-the-rack-view)
+- [Save and switch rack views](#save-and-switch-rack-views)
+- [Choose which connections to draw](#choose-which-connections-to-draw)
 - [Find ports by VLAN](#find-ports-by-vlan)
 - [Inspect and change connections](#inspect-and-change-connections)
 - [Export the rack plan](#export-the-rack-plan)
@@ -35,7 +37,7 @@ Available devices, ports, and actions depend on your [NetBox permissions](instal
 
 ![Cable focus on the patch panel and its direct connections](screenshots/rack-cable-focus.png)
 
-Device cable focus shows all matching cables in the current view or shows them as bundles. Clear the **Cables** chip to choose **Selected only** or **Hidden** again. To find a missing port, check the rack side, **Devices**, and **Port rows** first. Use the directory to find ports without a placed marker.
+Device cable focus narrows the connection display to the selected device. Clear the **Cables** chip to work across devices again. To find a missing port, check the rack side, **Devices**, and **Port rows** first. Use the directory to find ports without a placed marker.
 
 ## Choose the rack view
 
@@ -44,7 +46,7 @@ Open **View** in the rack toolbar. The table shows the built-in defaults. Your N
 | Setting | Default | When to change it |
 | --- | --- | --- |
 | **Rack side** | **Front** | Choose **Rear** for rear patch ports or **Both** to see both elevations side by side. |
-| **Lines** | **All** | Choose **Bundles** for an overview by device pair, **Selected only** to trace one chosen connection, or **Hidden** to hide persistent cable lines. Hover still lets you inspect a visible connected port. |
+| **Lines** | **All** | Choose **Bundles** for an overview by device pair, **Selected only** for a hand-picked set, **Filtered connections only** for connections that match your rules, or **Hidden** to hide persistent cable lines. |
 | **Routing strategy** | **Balanced** | Choose **PCB-style** for wider lanes and rounded turns. Expanded cable bundles use PCB-style automatically. |
 | **Device images** | **Visible** | Use **50% opacity** or **Hidden** when the image makes ports or cables hard to see. Ports remain interactive. Press **I** while dragging a cable to cycle the image mode. |
 | **Port fill** | **Connection status** | Choose **Untagged VLAN** to color the port interior by VLAN and read connection status from the outline. |
@@ -61,7 +63,7 @@ Use **Zoom** in the rack toolbar to change the drawing scale. **Auto** uses the 
 - On a touch screen, **pinch with two fingers** to zoom around their midpoint. Drag empty space with one finger to pan, or start on a port to connect or move a cable.
 - The toolbar shows your custom zoom percentage. Choose a preset to switch back to that zoom strategy. Your zoom is saved in this browser.
 
-Use **View → Use global defaults** to clear your saved view and list columns. For the current rack, this also clears your side override. Your VLAN color rules, device selection and rack filters are preserved.
+Use **View → Use global defaults** to reset the current display options, list fields, and rack side. VLAN color rules, device selection, and rack filters are preserved.
 
 ### Read dense wiring
 
@@ -71,10 +73,30 @@ Use **View → Use global defaults** to clear your saved view and list columns. 
 
 ![Front and rear elevations in Both view, with device-pair bundles and cable counts](screenshots/user-guide-bundles.png)
 
+## Save and switch rack views
+
+1. Set up the rack as you want your team to see it. A saved view includes the rack side, zoom, spacing between rack units, devices and port rows, line and routing settings, VLAN search and colors, and sidebar settings. Manual cable selections and connection filter rules are also saved.
+2. Select **Manage views…**, enter a name, and choose **Save as new view**. Use the toolbar's view selector to switch views. Choose **Personal view** to return to your browser preferences.
+3. With a saved view active, use **Manage views… → Save changes** to update its settings or name. Use **Delete view…** to remove it for everyone.
+4. Select **Set rack default** to open that view automatically when someone opens the rack. A link to a specific saved view opens that view directly. To remove the default, select **Clear rack default**.
+
+Open **Toolbar controls** in **Manage views…** to choose the controls shown with that view. For example, apply a device or VLAN filter, then hide its control before saving. The saved filter still applies. Use the view selector to return to **Personal view** or switch to another saved view. The toolbar choices are limited to features enabled in the plugin settings.
+
+Everyone who can view the rack can use its saved views. Managing them requires NetBox **Change** permission on the rack. The devices, cables, and VLANs shown still depend on each viewer's object permissions.
+
+## Choose which connections to draw
+
+- With **Lines → Selected only**, select **Choose connections…**, tick the cables you want to keep visible, and apply the selection. Search by cable, device, or port to find cables in a large rack. You can also add or remove individual cables from their context menu.
+- With **Lines → Filtered connections only**, open **Connection filter…**. Add conditions for either endpoint or for the pair of endpoints, VLAN membership, cable type, or length in metres. Match **All conditions (AND)** or **Any condition (OR)** in each group, and add nested groups to combine both operations. Applying the filter narrows the lines and the **Connections** list. The toolbar VLAN filter also applies to this list and line mode.
+
+For example, add a **Between endpoints** condition with a device type on one side and one or more devices on the other. Add a **VLAN membership** condition for **Untagged**, and choose **All conditions (AND)**. Each endpoint can also specify port names or ranges such as `1/1/1-12`. To allow multiple alternatives, add a group using **Any condition (OR)** and put one condition per alternative inside it.
+
 ## Configure the plugin
 
 Open **Cable Editor → Settings** in the NetBox sidebar, or **View → Plugin settings** inside a rack. This page requires [permission to change the plugin settings](installation.md#permissions).
 
+- **Rack features** enables tools and controls across all racks. You can turn off VLAN functions, device and port-row filters, rack planning, the Cable Calculator, export, saved views, and other controls independently. When rack side selection is off, the editor shows the front elevation. When the routing strategy selector is off, the rack uses the strategy in **View defaults**.
+- **Default rack toolbar** chooses the controls shown by default. A saved view can choose a different set from the features enabled globally.
 - **View defaults** sets the rack side, zoom, line mode, routing strategy, device images, port fill and highlighting, and which view options start enabled. Browser preferences override these starting values.
 - **Drawing** sets the target spacing between cables, devices and virtual tubes, and the starting gap and **+** / **−** step between devices. The router adapts its path to the space available.
 - **Ports and hover** sets the maximum port contour width and optional widths for free, connected and unavailable ports. Port contours scale down on small markers. The hover delay is set in milliseconds.
@@ -101,7 +123,7 @@ Choose **Review mapping** to open the designer with that template. Check the map
 
 Use **View → Port fill → Untagged VLAN**, then **Configure VLAN colors…**. Add a rule with a single ID, a comma-separated list such as `50,60,70`, or a range such as `50-70`. Choose the color and save. The first matching rule wins, followed by the VLAN's **Cable Editor color** and then the optional fallback. Ports without an untagged VLAN use a neutral fill. [Configure VLAN colors](installation.md#configure-vlan-colors)
 
-VLAN color rules affect the port fill in your browser. Use the VLAN search to highlight tagged membership. To change a port's VLAN assignment, edit the interface in NetBox.
+VLAN color rules affect the port fill. Save them in a rack view to share them. Use the VLAN search to highlight tagged membership. To change a port's VLAN assignment, edit the interface in NetBox.
 
 ## Inspect and change connections
 
@@ -232,7 +254,8 @@ For Codex in this checkout, use `$create-template-for-device-type` or `$create-t
 ## Saved settings and troubleshooting
 
 - **Shared across racks in this browser.** Zoom, line mode, routing strategy, images, panel visibility and open state, list fields, VLAN color rules, trim, and other display options use browser storage.
-- **Saved separately for each rack.** Rack side, selected devices and rows, device cable focus, VLAN filter, directory search, and display gaps use browser storage. The URL carries the active side, device, row, cable-focus, and VLAN filters so you can copy a link to that selection. The recipient's own display settings still apply.
+- **Personal settings saved separately for each rack.** Rack side, selected devices and rows, device cable focus, VLAN filter, directory search, display gaps, and connection selections and rules use browser storage.
+- **Shared rack views.** Named views are stored in NetBox. Select a view in the toolbar and copy the URL to share it with another rack viewer.
 - **A cable is missing.** Clear the **Cables** chip and VLAN filter, restore the devices and rows, select the relevant rack side, and choose **View → Lines → All**. Check the **Connections** list for a peer outside the elevation.
 - **A device image or port is missing.** Select **Device images → Visible**, check the rack side and port rows, then inspect the device or module type's layout. A port without coordinates can still be found in the directory.
 - **An edit action is unavailable.** Ask your NetBox administrator to verify the required [object permissions](installation.md#permissions) for the affected cables, devices, ports, or layouts.

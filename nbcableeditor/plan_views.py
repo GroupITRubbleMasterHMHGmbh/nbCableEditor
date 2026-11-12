@@ -23,22 +23,26 @@ from .cable_views import CableEditError, _cable_fields, _is_object_id, _port_ref
 from .calculator import calculate_report, configured_calculator, normalize_measurements, normalize_profile, report_csv
 from .models import RackCableGeometry, RackCablePlan
 from .plan_apply import apply_rack_plan
+from .rack_features import configured_rack_features
 from .request_data import JsonRequestError, read_json_object
 
 def _geometry(rack):
     return RackCableGeometry.objects.filter(rack=rack).values_list("measurements", flat=True).first() or {}
 
 
-def plan_bootstrap(request, rack):
-    config = configured_calculator()
+def plan_bootstrap(request, rack, features):
+    planning, calculator = features["planning"], features["calculator"]
+    if not (planning or calculator):
+        return None
+    config = configured_calculator() if planning else {}
     return {
-        "url": reverse("plugins:nbcableeditor:plans", args=[rack.pk]),
-        "reportUrl": reverse("plugins:nbcableeditor:calculator", args=[rack.pk]),
-        "canAdd": request.user.has_perm("nbcableeditor.add_rackcableplan"),
-        "canMeasure": Rack.objects.restrict(request.user, "change").filter(pk=rack.pk).exists(),
-        "profiles": [_profile(name, options) for name, options in config["profiles"].items()],
-        "defaultProfile": config["defaultProfile"],
-        "geometry": _geometry(rack),
+        "url": reverse("plugins:nbcableeditor:plans", args=[rack.pk]) if planning else None,
+        "reportUrl": reverse("plugins:nbcableeditor:calculator", args=[rack.pk]) if calculator else None,
+        "canAdd": planning and request.user.has_perm("nbcableeditor.add_rackcableplan"),
+        "canMeasure": planning and calculator and Rack.objects.restrict(request.user, "change").filter(pk=rack.pk).exists(),
+        "profiles": [_profile(name, options) for name, options in config.get("profiles", {}).items()],
+        "defaultProfile": config.get("defaultProfile"),
+        "geometry": _geometry(rack) if planning else {},
     }
 
 
@@ -260,8 +264,8 @@ def _preview(user, plan, rack_data):
             else:
                 targets[key] = row["id"]
 
-    report = _report(plan.rack, rack_data, plan)
-    for row in report["review"]:
+    report = _report(plan.rack, rack_data, plan) if rack_data["settings"]["features"]["calculator"] else None
+    for row in (report or {}).get("review", ()):
         for warning in row["warnings"]:
             issue(warning, row["id"], severity="warning")
     token = None
@@ -328,6 +332,9 @@ def rack_plans(request, pk):
     if request.method == "POST" and not user.is_authenticated:
         raise CableEditError("Sign in to edit rack plans and measurements.", 403)
     rack = get_object_or_404(Rack.objects.restrict(user), pk=pk)
+    features = configured_rack_features()
+    if not features["planning"]:
+        raise CableEditError("Rack planning is disabled in the Cable Editor settings.", 403)
     if request.method == "GET":
         editable = set(_plans_for(user, rack, "change").values_list("pk", flat=True))
         deletable = set(_plans_for(user, rack, "delete").values_list("pk", flat=True))
@@ -338,6 +345,8 @@ def rack_plans(request, pk):
     action = data.get("action")
     with transaction.atomic():
         if action == "geometry":
+            if not features["calculator"]:
+                raise CableEditError("Cable calculator is disabled in the Cable Editor settings.", 403)
             if not Rack.objects.restrict(user, "change").filter(pk=pk).exists():
                 raise CableEditError("You do not have permission to edit rack measurements.", 403)
             geometry = _validated(normalize_measurements, data.get("geometry"))
@@ -346,6 +355,8 @@ def rack_plans(request, pk):
         if action != "create":
             raise CableEditError("Choose a valid rack plan action.", 400)
         config = configured_calculator()
+        if not features["calculator"] and "profileId" in data:
+            raise CableEditError("Cable calculator is disabled in the Cable Editor settings.", 403)
         profile_id = data.get("profileId") or config["defaultProfile"]
         if not isinstance(profile_id, str) or profile_id not in config["profiles"]:
             raise CableEditError("Choose an available calculator profile.", 400)
@@ -362,6 +373,9 @@ def rack_plan(request, pk, plan_id):
     if request.method == "POST" and not user.is_authenticated:
         raise CableEditError("Sign in to edit rack plans.", 403)
     rack = get_object_or_404(Rack.objects.restrict(user), pk=pk)
+    features = configured_rack_features()
+    if not features["planning"]:
+        raise CableEditError("Rack planning is disabled in the Cable Editor settings.", 403)
     visible = _plans_for(user, rack)
     if request.method == "GET":
         plan = get_object_or_404(visible, pk=plan_id)
@@ -401,6 +415,8 @@ def rack_plan(request, pk, plan_id):
             if "name" in data:
                 plan.name = _name(data["name"])
             if "profile" in data:
+                if not features["calculator"]:
+                    raise CableEditError("Cable calculator is disabled in the Cable Editor settings.", 403)
                 profile = data["profile"]
                 if not isinstance(profile, dict) or "options" not in profile:
                     raise CableEditError("Enter a valid calculator profile.", 400)
@@ -441,9 +457,14 @@ def rack_plan(request, pk, plan_id):
 @_json_errors
 def rack_calculator(request, pk):
     rack = get_object_or_404(Rack.objects.restrict(request.user), pk=pk)
+    features = configured_rack_features()
+    if not features["calculator"]:
+        raise CableEditError("Cable calculator is disabled in the Cable Editor settings.", 403)
     plan_id = request.GET.get("plan")
     plan = None
     if plan_id is not None:
+        if not features["planning"]:
+            raise CableEditError("Rack planning is disabled in the Cable Editor settings.", 403)
         if not re.fullmatch(r"[1-9][0-9]{0,18}", plan_id) or not _is_object_id(int(plan_id)):
             raise CableEditError("Choose a valid rack plan.", 400)
         plan = get_object_or_404(_plans_for(request.user, rack), pk=int(plan_id))

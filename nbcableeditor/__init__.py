@@ -5,7 +5,7 @@ class NbCableEditorConfig(PluginConfig):
     name = "nbcableeditor"
     verbose_name = "Cable Editor"
     description = "Place ports on device images and connect them in a rack."
-    version = "0.10.65"
+    version = "0.10.67"
     base_url = "nbcableeditor"
     min_version = "4.5.10"
     max_version = "4.5.99"

@@ -13,6 +13,7 @@ from extras.models import CustomField
 from .calculator_settings import calculator_settings_context, update_calculator_settings
 from .layout_placeholders import object_name
 from .models import CableEditorSettings
+from .rack_features import RACK_FEATURE_LABELS, VIEW_TOOLBAR_FEATURES, normalize_rack_flags
 
 
 SETTINGS_PERMISSION = CableEditorSettings.CHANGE_PERMISSION
@@ -43,6 +44,12 @@ PORT_FIELDS = (
 )
 
 SETTINGS_GROUPS = (
+    ("Rack features", "Choose which tools and controls are available across all racks. When the rack side selector is disabled, the editor opens on the front.", (
+        "features",
+    )),
+    ("Default rack toolbar", "Choose which available controls to show by default. A shared rack view can change the visibility of available controls.", (
+        "toolbarDefaults",
+    )),
     ("View defaults", "Starting point for users who have not chosen a view in their browser.", (
         "face", "zoom", "lines", "routingStrategy", "images", "portFill", "interfaceHighlight",
         "connections", "directory", "trim", "virtualCombine",
@@ -59,6 +66,10 @@ SETTINGS_GROUPS = (
     )),
 )
 DISPLAY_KEYS = SETTINGS_GROUPS[-1][2]
+RACK_FLAG_FIELDS = {
+    "features": (RACK_FEATURE_LABELS, "rackFeatureControls"),
+    "toolbarDefaults": (VIEW_TOOLBAR_FEATURES, "rackToolbarControls"),
+}
 
 
 def _choice(label, default, *choices):
@@ -86,6 +97,9 @@ def _fields(label, choices=(), default=(), help_text=""):
 
 
 class CableEditorSettingsForm(forms.Form):
+    features = _fields("Available rack features", tuple(RACK_FEATURE_LABELS.items()), RACK_FEATURE_LABELS)
+    toolbarDefaults = _fields("Visible controls by default",
+                             [(key, RACK_FEATURE_LABELS[key]) for key in VIEW_TOOLBAR_FEATURES], VIEW_TOOLBAR_FEATURES)
     face = _choice("Rack side", "front", ("front", "Front"), ("rear", "Rear"), ("both", "Both"))
     zoom = _choice("Zoom", "auto", *ZOOM_CHOICES)
     lines = _choice("Lines", "all", ("all", "All"), ("bundles", "Bundles"),
@@ -140,16 +154,23 @@ class CableEditorSettingsForm(forms.Form):
         return values
 
     def options(self):
-        return {
+        options = {
             key: float(value) if isinstance(self.fields[key], forms.DecimalField) and value is not None else value
-            for key, value in self.cleaned_data.items()
+            for key, value in self.cleaned_data.items() if key not in RACK_FLAG_FIELDS
         }
+        for name, (keys, marker) in RACK_FLAG_FIELDS.items():
+            if name in self.data or self.data.get(marker) == "1":
+                selected = set(self.cleaned_data[name])
+                options[name] = {key: key in selected for key in keys}
+        return options
 
 
 def _configured_options():
     defaults = {name: field.initial for name, field in CableEditorSettingsForm.base_fields.items()}
     stored = CableEditorSettings.objects.filter(pk=1).values_list("options", flat=True).first() or {}
     options = {**defaults, **stored}
+    for name, (keys, _) in RACK_FLAG_FIELDS.items():
+        options[name] = normalize_rack_flags(stored.get(name), keys)
     if options["zoom"] == "fit":
         options["zoom"] = "horizontal-fit"
     return options
@@ -179,7 +200,9 @@ def nbcableeditor_options():
     display = {key: options.pop(key) for key in DISPLAY_KEYS}
     display["cableCustomFields"] = [field.name for field in fields]
     display["cableCustomFieldLabels"] = {field.name: field.label or field.name for field in fields}
-    return {**options, "display": display}, fields
+    if not options["features"]["rackSides"]:
+        options["face"] = "front"
+    return {**options, "display": display, "featureLabels": RACK_FEATURE_LABELS}, fields
 
 
 def cable_custom_values(user, cables, fields):
@@ -227,9 +250,10 @@ def editor_settings(request):
             return response
     custom_fields = list(_cable_fields())
     options = _configured_options()
+    initial = {**options, **{name: [key for key, enabled in options[name].items() if enabled] for name in RACK_FLAG_FIELDS}}
     form = CableEditorSettingsForm(
         request.POST if request.method == "POST" and not calculator_post else None,
-        initial=options, custom_fields=custom_fields,
+        initial=initial, custom_fields=custom_fields,
     )
     if form.is_bound and form.is_valid():
         with transaction.atomic():

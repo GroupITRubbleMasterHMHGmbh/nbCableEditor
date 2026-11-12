@@ -82,6 +82,8 @@ The editor respects NetBox object permissions and any object filters.
 | --- | --- |
 | View the rack | **View** on the rack, visible devices, and their ports. Device artwork, model labels, and layout links require **View** on the corresponding device type. Port positions also require **View** on their component templates. |
 | View cables and VLAN data | **View** on the relevant cables and VLANs. A cable trace shows the points the user has permission to view. |
+| Open a shared rack view | **View** on the rack. Devices, connections, and VLAN data are subject to their own NetBox permissions. |
+| Create, edit, delete, or set the default for shared rack views | **View** and **Change** on the rack. |
 | View a port layout | **View** on the device type or module type and on the interface, front port, rear port, and module bay templates it uses. |
 | Save a port layout | Also requires **Change** on the device type or module type. |
 | Review and import a built-in device type template | **View** and **Change** on the corresponding device type, plus the template-component permissions needed by the layout editor. Manufacturer names and search require **View** on the manufacturer. |

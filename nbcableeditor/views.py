@@ -31,10 +31,11 @@ from .models import LayoutRevision, PortPlacement
 from .plan_views import plan_bootstrap
 from .rack_layouts import rack_layouts
 from .rack_traces import (
-    PORT_KINDS, device_label, endpoint_data, native_path, port_metadata, readable_chassis_names,
+    NO_VLAN_DATA, PORT_KINDS, device_label, endpoint_data, native_path, port_metadata, readable_chassis_names,
     readable_nodes, trace_payload,
 )
 from .request_data import JsonRequestError, read_json_object
+from .saved_views import saved_view_bootstrap
 
 
 MAX_DESIGN_ITEMS_PER_FACE = 256
@@ -450,8 +451,8 @@ def _rack_object_tags(obj, catalog):
     return [catalog[tag.pk] for tag in obj.tags.all() if tag.pk in catalog]
 
 
-def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fields):
-    interfaces = {port.pk: port for port in ports.values() if isinstance(port, Interface)}
+def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fields, *, include_vlans):
+    interfaces = {port.pk: port for port in ports.values() if isinstance(port, Interface)} if include_vlans else {}
     cable_ids = {port.cable_id for port in ports.values() if port.cable_id is not None}
     if not cable_ids:
         return [], _vlan_data_for_ports(user, interfaces.values())
@@ -505,7 +506,8 @@ def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fie
         records.append((cable, end_a, end_b, peer_a, peer_b, simple, trace_a, trace_b))
 
     nodes, links = readable_nodes(user, types, refs, ports, known_cables)
-    interfaces.update({port.pk: port for port in nodes.values() if isinstance(port, Interface)})
+    if include_vlans:
+        interfaces.update({port.pk: port for port in nodes.values() if isinstance(port, Interface)})
     vlans = _vlan_data_for_ports(user, interfaces.values())
     endpoints = endpoint_data(user, nodes, vlans, devices, ports)
     custom_values = cable_custom_values(user, known_cables.values(), custom_fields)
@@ -551,7 +553,10 @@ def _occupancy(port):
 @require_GET
 def rack_editor(request, pk):
     context = _nbcableeditor_context(request, pk)
-    context["rack_data"]["planning"] = plan_bootstrap(request, context["rack"])
+    rack_data = context["rack_data"]
+    features = rack_data["settings"]["features"]
+    rack_data["planning"] = plan_bootstrap(request, context["rack"], features)
+    rack_data["savedViews"] = saved_view_bootstrap(request, context["rack"]) if features["savedViews"] else None
     return render(request, "nbcableeditor/rack.html", context)
 
 
@@ -561,6 +566,7 @@ def _nbcableeditor_context(request, pk):
     user = request.user
     rack = get_object_or_404(Rack.objects.restrict(user), pk=pk)
     editor_settings, custom_fields = nbcableeditor_options()
+    features = editor_settings["features"]
     devices = list(
         Device.objects.restrict(user).filter(rack=rack)
         .select_related("device_type").order_by("name", "pk")
@@ -598,7 +604,9 @@ def _nbcableeditor_context(request, pk):
             queryset = queryset.select_related("virtual_circuit_termination", "_path")
         ports.update({port_key(model, port.pk): port for port in queryset})
         editable_ports[model] = set(model.objects.restrict(user, "change").filter(device_id__in=device_map).values_list("pk", flat=True))
-    cables, vlans = _rack_connection_data(user, rack.pk, device_map, ports, tag_catalogs[Cable], custom_fields)
+    cables, vlans = _rack_connection_data(
+        user, rack.pk, device_map, ports, tag_catalogs[Cable], custom_fields, include_vlans=features["vlan"],
+    )
     visible_cable_ids = {cable["id"] for cable in cables}
     can_add = user.has_perm("dcim.add_cable")
     native_cable_add = reverse("dcim:cable_add") if can_add else None
@@ -631,14 +639,12 @@ def _nbcableeditor_context(request, pk):
             "tags": _rack_object_tags(port, tag_catalogs[type(port)]),
             "metadataEditable": port.pk in editable_ports[type(port)],
             **({
-                **vlans[port.pk],
+                **vlans.get(port.pk, NO_VLAN_DATA),
                 "speedKbps": port.speed,
                 "duplex": port.get_duplex_display() or "",
                 "mtu": port.mtu,
                 "managementOnly": port.mgmt_only,
-            } if is_interface else {
-                "vlanMode": "", "vlanModeDisplay": "", "untaggedVlan": None, "taggedVlans": [],
-            }),
+            } if is_interface else NO_VLAN_DATA),
             **(placement or {"face": LAYOUT_PORTS[kind][2], "x": None, "y": None}),
             "cableId": port.cable_id if cable_visible else None,
             "occupancy": occupancy,
@@ -664,6 +670,7 @@ def _nbcableeditor_context(request, pk):
                     "id": device.pk,
                     "name": display_name(device),
                     "deviceType": device.device_type.model if device.device_type_id in visible_types else None,
+                    "deviceTypeId": device.device_type_id if device.device_type_id in visible_types else None,
                     "position": float(device.position) if device.position is not None else None,
                     "height": float(device.device_type.u_height),
                     "face": device.face or None,
@@ -695,6 +702,6 @@ def _nbcableeditor_context(request, pk):
             "canAdd": can_add,
             "canChange": user.has_perm("dcim.change_cable"),
             "canDelete": user.has_perm("dcim.delete_cable"),
-            "history": history_for_rack(user, rack.pk),
+            "history": history_for_rack(user, rack.pk) if features["history"] else None,
         },
     }
