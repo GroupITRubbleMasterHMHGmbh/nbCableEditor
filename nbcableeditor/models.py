@@ -143,3 +143,21 @@ class RackCablePlan(models.Model):
 class RackCableGeometry(models.Model):
     rack = models.OneToOneField("dcim.Rack", on_delete=models.CASCADE, related_name="+")
     measurements = models.JSONField(default=dict, blank=True)
+
+
+class RackSavedView(models.Model):
+    rack = models.ForeignKey("dcim.Rack", on_delete=models.CASCADE, related_name="+")
+    name = models.CharField(max_length=120)
+    settings = models.JSONField(default=dict)
+    is_default = models.BooleanField(default=False)
+    revision = models.PositiveBigIntegerField(default=0)
+
+    class Meta:
+        ordering = (Lower("name"), "pk")
+        constraints = [
+            models.UniqueConstraint(Lower("name"), "rack", name="nbcableeditor_view_rack_name"),
+            models.UniqueConstraint(fields=("rack",), condition=Q(is_default=True), name="nbcableeditor_view_rack_default"),
+        ]
+
+    def __str__(self):
+        return self.name

@@ -23,6 +23,7 @@ from utilities.exceptions import AbortRequest
 
 from .cable_history import HistoryConflictError, history_payload, jump_history, lock_history, record_history
 from .metadata_tags import TagEditError, replayed_tags, updated_tags, visible_tags
+from .rack_features import configured_rack_features
 from .request_data import JsonRequestError, read_json_object
 
 
@@ -515,8 +516,17 @@ def _batch_operations(data):
 def _mutate(db, user, rack_id, data):
     if not Rack.objects.using(db).restrict(user).filter(pk=rack_id).exists():
         raise CableEditError("Rack not found.", 404)
-    journal = lock_history(db, user, rack_id)
     action = data.get("action")
+    if action == "history" and not configured_rack_features()["history"]:
+        raise CableEditError("Cable history is disabled in the Cable Editor settings.", 403)
+
+    if action == "batch":
+        operations = _batch_operations(data)
+        features = configured_rack_features()
+        if any(not features["unplug" if operation.get("action") == "delete" else "quickConnect"] for operation in operations):
+            raise CableEditError("The requested batch mode is disabled in the Cable Editor settings.", 403)
+
+    journal = lock_history(db, user, rack_id)
     if action == "history":
         from .plan_apply import replay_rack_plan
 
@@ -528,7 +538,7 @@ def _mutate(db, user, rack_id, data):
         return {"history": history_payload(journal)}, 200
 
     if action == "batch":
-        changes = [_edit_cable(db, user, rack_id, operation) for operation in _batch_operations(data)]
+        changes = [_edit_cable(db, user, rack_id, operation) for operation in operations]
         ids = [(change["after"] or change["before"])["id"] for change in changes]
         created = sum(change["before"] is None for change in changes)
         deleted = len(changes) - created

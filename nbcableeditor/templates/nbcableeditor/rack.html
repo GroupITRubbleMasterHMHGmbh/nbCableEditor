@@ -7,6 +7,7 @@
   {{ block.super }}
   <link rel="stylesheet" href="{% static 'nbcableeditor/artwork.css' %}?v={{ editor_version }}">
   <link rel="stylesheet" href="{% static 'nbcableeditor/rack.css' %}?v={{ editor_version }}">
+  <link rel="stylesheet" href="{% static 'nbcableeditor/rack-connection-filter.css' %}?v={{ editor_version }}">
 {% endblock %}
 
 {% block javascript %}
@@ -26,6 +27,9 @@
   <script src="{% static 'nbcableeditor/rack-export-print.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-vlan-colors.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-plan.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-connection-filter.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-toolbar.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-saved-views.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack.js' %}?v={{ editor_version }}" defer></script>
 {% endblock %}
 
@@ -40,8 +44,16 @@
           <h1 class="re-rack-toolbar-title">
             <a href="{{ rack.get_absolute_url }}" title="Open rack in NetBox">{{ rack }} <i class="mdi mdi-open-in-new" aria-hidden="true"></i></a>
           </h1>
+          <div class="re-rack-saved-views" data-saved-views data-rack-feature="savedViews" hidden>
+            <label for="re-rack-saved-view" class="visually-hidden">Saved rack view</label>
+            <select class="form-select form-select-sm no-ts" id="re-rack-saved-view" data-saved-view-select>
+              <option value="personal">Personal view</option>
+            </select>
+            <button class="btn btn-outline-primary btn-sm" type="button" data-saved-view-manage
+                    aria-haspopup="dialog" aria-controls="re-rack-saved-view-dialog" hidden>Manage views…</button>
+          </div>
           <div class="re-rack-filter-controls">
-            <details class="re-rack-device-filter" data-device-filter>
+            <details class="re-rack-device-filter" data-device-filter data-rack-feature="devices">
               <summary class="btn btn-outline-primary btn-sm re-rack-filter-summary" data-device-filter-summary>Devices: All</summary>
               <div class="re-rack-filter-panel">
                 <p class="text-muted small mb-2">Choose the devices you want to see.</p>
@@ -49,8 +61,8 @@
                 <button class="btn btn-outline-secondary btn-sm mt-2" type="button" data-device-reset hidden>Show all</button>
               </div>
             </details>
-            <span class="visually-hidden" role="status" data-device-filter-status></span>
-            <details data-port-row-filter hidden>
+            <span class="visually-hidden" role="status" data-device-filter-status data-rack-feature="devices"></span>
+            <details data-port-row-filter data-rack-feature="portRows" hidden>
               <summary class="btn btn-outline-primary btn-sm re-rack-filter-summary" data-port-row-summary>Port rows</summary>
               <div class="re-rack-filter-panel re-rack-port-row-panel">
                 <p class="text-muted small mb-2">Choose which port rows to show in the rack elevations.</p>
@@ -59,13 +71,14 @@
                 <button class="btn btn-outline-secondary btn-sm mt-2" type="button" data-port-row-reset hidden>All rows</button>
               </div>
             </details>
-            <span class="visually-hidden" role="status" data-port-row-status></span>
-            <details data-view-options>
+            <span class="visually-hidden" role="status" data-port-row-status data-rack-feature="portRows"></span>
+            <details data-view-options data-rack-feature="viewOptions">
               <summary class="btn btn-outline-primary btn-sm re-rack-filter-summary" data-view-summary>View</summary>
               <div class="re-rack-filter-panel re-rack-view-options" role="group" aria-label="Rack view options">
                 <div class="re-rack-view-fields">
-                  <span id="re-rack-side-label">Rack side</span>
-                  <div class="btn-group re-rack-face-choices" role="group" aria-labelledby="re-rack-side-label">
+                  <span id="re-rack-side-label" data-rack-feature="rackSides">Rack side</span>
+                  <div class="btn-group re-rack-face-choices" role="group" aria-labelledby="re-rack-side-label"
+                       data-rack-feature="rackSides">
                     <button class="btn btn-outline-secondary btn-sm" type="button" data-rack-face-choice="front"
                             aria-pressed="true" aria-controls="re-rack-face-front">Front</button>
                     <button class="btn btn-outline-secondary btn-sm" type="button" data-rack-face-choice="rear"
@@ -73,62 +86,65 @@
                     <button class="btn btn-outline-secondary btn-sm" type="button" data-rack-face-choice="both"
                             aria-pressed="false" aria-controls="re-rack-face-front re-rack-face-rear">Both</button>
                   </div>
-                  <label for="re-rack-lines">Lines</label>
-                  <select class="form-select no-ts form-select-sm" id="re-rack-lines" data-lines>
+                  <label for="re-rack-lines" data-rack-feature="lines">Lines</label>
+                  <select class="form-select no-ts form-select-sm" id="re-rack-lines" data-lines data-rack-feature="lines">
                     <option value="all">All</option>
                     <option value="bundles">Bundles</option>
                     <option value="selected">Selected only</option>
+                    <option value="filtered">Filtered connections only</option>
                     <option value="none">Hidden</option>
                   </select>
-                  <label for="re-rack-routing-strategy">Routing strategy</label>
+                  <label for="re-rack-routing-strategy" data-rack-feature="routingStrategy">Routing strategy</label>
                   <select class="form-select no-ts form-select-sm" id="re-rack-routing-strategy"
-                          data-routing-strategy aria-describedby="re-rack-routing-help">
+                          data-routing-strategy aria-describedby="re-rack-routing-help" data-rack-feature="routingStrategy">
                     <option value="balanced" selected>Balanced</option>
                     <option value="pcb">PCB-style</option>
                   </select>
-                  <p class="re-rack-view-help text-secondary" id="re-rack-routing-help">
+                  <p class="re-rack-view-help text-secondary" id="re-rack-routing-help" data-rack-feature="routingStrategy">
                     PCB-style uses wider lanes and rounded turns around devices.
                   </p>
-                  <label for="re-rack-device-images">Device images</label>
+                  <label for="re-rack-device-images" data-rack-feature="deviceImages">Device images</label>
                   <select class="form-select no-ts form-select-sm" id="re-rack-device-images"
-                          data-device-images aria-keyshortcuts="I">
+                          data-device-images aria-keyshortcuts="I" data-rack-feature="deviceImages">
                     <option value="visible">Visible</option>
                     <option value="faded">50% opacity</option>
                     <option value="hidden">Hidden</option>
                   </select>
-                  <label for="re-rack-port-fill">Port fill</label>
+                  <label for="re-rack-port-fill" data-rack-feature="vlan">Port fill</label>
                   <select class="form-select no-ts form-select-sm" id="re-rack-port-fill"
-                          aria-describedby="re-rack-port-fill-help" data-port-fill>
+                          aria-describedby="re-rack-port-fill-help" data-port-fill data-rack-feature="vlan">
                     <option value="status">Connection status</option>
                     <option value="vlan">Untagged VLAN</option>
                   </select>
-                  <p class="re-rack-view-help text-secondary" id="re-rack-port-fill-help">
+                  <p class="re-rack-view-help text-secondary" id="re-rack-port-fill-help" data-rack-feature="vlan">
                     In VLAN mode the port outline shows its connection status.
                   </p>
                   <button class="btn btn-outline-secondary btn-sm re-rack-vlan-color-configure" type="button"
-                          aria-haspopup="dialog" aria-controls="re-rack-vlan-color-dialog" data-vlan-color-settings>Configure VLAN colors…</button>
-                  <label for="re-rack-interface-highlight">Interfaces</label>
-                  <select class="form-select no-ts form-select-sm" id="re-rack-interface-highlight" data-interface-highlight>
+                          aria-haspopup="dialog" aria-controls="re-rack-vlan-color-dialog" data-vlan-color-settings
+                          data-rack-feature="vlan">Configure VLAN colors…</button>
+                  <label for="re-rack-interface-highlight" data-rack-feature="interfaceHighlight">Interfaces</label>
+                  <select class="form-select no-ts form-select-sm" id="re-rack-interface-highlight"
+                          data-interface-highlight data-rack-feature="interfaceHighlight">
                     <option value="all">All</option>
                     <option value="free">Highlight Free</option>
                     <option value="used">Highlight Used</option>
                   </select>
                 </div>
-                <label class="form-check">
+                <label class="form-check" data-rack-feature="panels">
                   <input class="form-check-input" type="checkbox" data-view-connections
                          aria-controls="re-rack-connections-section" checked>
                   <span class="form-check-label">Connections</span>
                 </label>
-                <label class="form-check">
+                <label class="form-check" data-rack-feature="panels">
                   <input class="form-check-input" type="checkbox" data-view-directory
                          aria-controls="re-rack-directory-section" checked>
                   <span class="form-check-label">Interface directory</span>
                 </label>
-                <label class="form-check">
+                <label class="form-check" data-rack-feature="trim">
                   <input class="form-check-input" type="checkbox" data-view-trim aria-controls="re-rack-board">
                   <span class="form-check-label">Trim width to visible ports</span>
                 </label>
-                <label class="form-check">
+                <label class="form-check" data-rack-feature="virtualCombine">
                   <input class="form-check-input" type="checkbox" data-view-virtual-combine aria-controls="re-rack-board">
                   <span class="form-check-label">Virtual combine <small class="text-secondary">(experimental)</small></span>
                 </label>
@@ -146,14 +162,21 @@
               </div>
             </details>
             <button class="btn btn-outline-primary btn-sm" type="button"
-                    aria-label="Clear device cable focus" data-cable-focus-clear hidden></button>
+                    aria-label="Clear device cable focus" data-cable-focus-clear data-rack-feature="deviceCableFocus" hidden></button>
+            <button class="btn btn-outline-primary btn-sm" type="button" data-selected-connections-open
+                    data-rack-feature="selectedConnections"
+                    aria-haspopup="dialog" aria-controls="re-rack-selected-connections" hidden>Choose connections…</button>
+            <button class="btn btn-outline-primary btn-sm" type="button" data-connection-filter-open
+                    data-rack-feature="connectionFilter"
+                    aria-haspopup="dialog" aria-controls="re-rack-connection-filter" hidden>Connection filter…</button>
           </div>
-          <div class="btn-group re-rack-mode-buttons" role="group" aria-label="Cable editing mode">
+          <div class="btn-group re-rack-mode-buttons" role="group" aria-label="Cable editing mode"
+               data-rack-feature-any="quickConnect unplug">
             <button type="button" class="btn btn-sm btn-outline-secondary" data-quick-mode="normal"
                     aria-pressed="true">Normal</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" data-quick-mode="connect"
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-quick-mode="connect" data-rack-feature="quickConnect"
                     aria-pressed="false" {% if not rack_data.canAdd %}disabled{% endif %}>Quick connect</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" data-quick-mode="unplug"
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-quick-mode="unplug" data-rack-feature="unplug"
                     aria-pressed="false" {% if not rack_data.canDelete %}disabled{% endif %}>Unplug</button>
           </div>
           <div class="re-rack-quick-actions">
@@ -161,7 +184,7 @@
             <button type="button" class="btn btn-primary btn-sm" data-quick-apply hidden>Apply batch</button>
             <button type="button" class="btn btn-outline-secondary btn-sm" data-quick-clear hidden>Discard</button>
           </div>
-          <div class="re-rack-vlan-filter" role="group" aria-label="Highlight by VLAN">
+          <div class="re-rack-vlan-filter" role="group" aria-label="Highlight by VLAN" data-rack-feature="vlan">
             <label for="re-rack-vlan-query">VLAN</label>
             <input class="form-control form-control-sm" id="re-rack-vlan-query" type="search" inputmode="numeric"
                    placeholder="e.g. 50" autocomplete="off" data-vlan-query>
@@ -180,27 +203,34 @@
             </div>
           </div>
           {% if rack_data.planning %}
-            <div class="re-rack-plan-controls" role="group" aria-label="Rack planning">
-              <label class="visually-hidden" for="re-rack-plan-select">Wiring plan</label>
-              <select class="form-select form-select-sm no-ts" id="re-rack-plan-select" data-plan-select>
-                <option value="">Select plan</option>
-              </select>
-              <label class="visually-hidden" for="re-rack-plan-view">Wiring view</label>
-              <select class="form-select form-select-sm no-ts" id="re-rack-plan-view" data-plan-view>
-                <option value="stock">Inventory</option>
-                <option value="mixed" disabled>Inventory + plan</option>
-                <option value="plan" disabled>Plan only</option>
-              </select>
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-plan-manage aria-haspopup="dialog">
-                <i class="mdi mdi-clipboard-edit-outline" aria-hidden="true"></i> Plans
-              </button>
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-plan-report aria-haspopup="dialog">
-                <i class="mdi mdi-ruler" aria-hidden="true"></i> Cable calculator
-              </button>
+            <div class="re-rack-plan-controls" data-rack-feature-any="planning calculator">
+              {% if rack_data.planning.url %}
+                <div class="re-rack-plan-options" role="group" aria-label="Rack planning" data-rack-feature="planning">
+                  <label class="visually-hidden" for="re-rack-plan-select">Wiring plan</label>
+                  <select class="form-select form-select-sm no-ts" id="re-rack-plan-select" data-plan-select>
+                    <option value="">Select plan</option>
+                  </select>
+                  <label class="visually-hidden" for="re-rack-plan-view">Wiring view</label>
+                  <select class="form-select form-select-sm no-ts" id="re-rack-plan-view" data-plan-view>
+                    <option value="stock">Inventory</option>
+                    <option value="mixed" disabled>Inventory + plan</option>
+                    <option value="plan" disabled>Plan only</option>
+                  </select>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" data-plan-manage aria-haspopup="dialog">
+                    <i class="mdi mdi-clipboard-edit-outline" aria-hidden="true"></i> Plans
+                  </button>
+                </div>
+              {% endif %}
+              {% if rack_data.planning.reportUrl %}
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-plan-report aria-haspopup="dialog"
+                        data-rack-feature="calculator">
+                  <i class="mdi mdi-ruler" aria-hidden="true"></i> Cable calculator
+                </button>
+              {% endif %}
             </div>
           {% endif %}
           <div class="re-rack-toolbar-actions">
-            <div class="re-rack-zoom-control">
+            <div class="re-rack-zoom-control" data-rack-feature="zoom">
               <label for="re-rack-zoom" class="small">Zoom</label>
               <select class="form-select form-select-sm no-ts" id="re-rack-zoom" data-zoom>
                 <optgroup label="Fit to view">
@@ -216,7 +246,7 @@
                 <option value="custom" hidden>Custom</option>
               </select>
             </div>
-            <div class="btn-group" role="group" aria-label="Cable change history">
+            <div class="btn-group" role="group" aria-label="Cable change history" data-rack-feature="history">
               <button type="button" class="btn btn-sm btn-outline-secondary re-rack-icon-button" data-history-undo
                       aria-label="Undo" title="Undo" disabled><i class="mdi mdi-undo" aria-hidden="true"></i></button>
               <button type="button" class="btn btn-sm btn-outline-secondary re-rack-icon-button" data-history-redo
@@ -224,17 +254,18 @@
               <button type="button" class="btn btn-sm btn-outline-secondary re-rack-icon-button" data-history-open
                       aria-label="History" title="History"><i class="mdi mdi-history" aria-hidden="true"></i></button>
             </div>
-            <button type="button" class="btn btn-sm btn-outline-primary" data-export-open aria-haspopup="dialog"
+            <button type="button" class="btn btn-sm btn-outline-primary" data-export-open aria-haspopup="dialog" data-rack-feature="export"
                     aria-label="Export plan"><i class="mdi mdi-export-variant" aria-hidden="true"></i> Export</button>
           </div>
         </div>
         <p class="re-rack-quick-status text-muted small mb-0" role="status" data-quick-status hidden></p>
+        <p class="small mb-0" role="status" data-saved-view-status hidden></p>
         {% if rack_data.planning %}
           <p class="re-rack-plan-message small mb-0" role="status" data-plan-message hidden></p>
         {% endif %}
       </nav>
       <section class="card re-rack-panel" aria-label="Rack elevations">
-        {% if rack_data.planning %}
+        {% if rack_data.planning.url %}
           <div class="re-rack-plan-bar" data-plan-bar hidden>
             <div class="re-rack-plan-caption">
               <span class="badge bg-primary-lt" data-plan-indicator>Draft</span>
@@ -265,7 +296,7 @@
           <div class="re-rack-bundle-cables" data-bundle-cables role="group" aria-label="Cables in selected bundle" hidden></div>
         </div>
         <div class="re-rack-scroll" data-scroll tabindex="0" aria-label="Scrollable rack elevations"
-             aria-description="Use the mouse wheel or pinch to zoom. Drag an empty area to pan.">
+             aria-description="Drag an empty area to pan.">
           <div class="re-rack-board" id="re-rack-board" data-board data-rack-face="front">
             <div class="re-rack-unit-column" role="group" aria-label="Rack units">
               <h2 class="re-rack-face-heading" aria-hidden="true">U</h2>
@@ -313,7 +344,7 @@
               <details class="re-rack-sidebar-fields">
                 <summary>Fields</summary>
                 <div class="re-rack-field-choices" role="group" aria-label="Connection fields">
-                  <label class="form-check">
+                  <label class="form-check" {% if not rack_data.settings.features.vlan %}hidden{% endif %}>
                     <input class="form-check-input" type="checkbox" data-connection-field="vlan" checked>
                     <span class="form-check-label">VLANs</span>
                   </label>
@@ -356,11 +387,11 @@
               <details class="re-rack-sidebar-fields">
                 <summary>Fields</summary>
                 <div class="re-rack-field-choices" role="group" aria-label="Interface directory fields">
-                  <label class="form-check">
+                  <label class="form-check" {% if not rack_data.settings.features.vlan %}hidden{% endif %}>
                     <input class="form-check-input" type="checkbox" data-directory-field="vlan" checked>
                     <span class="form-check-label">VLANs</span>
                   </label>
-                  <label class="form-check">
+                  <label class="form-check" {% if not rack_data.settings.features.vlan %}hidden{% endif %}>
                     <input class="form-check-input" type="checkbox" data-directory-field="peer-vlan">
                     <span class="form-check-label">Peer VLANs</span>
                   </label>
@@ -735,6 +766,46 @@
         </div>
       </dialog>
     {% endif %}
+    <dialog class="re-rack-dialog" id="re-rack-saved-view-dialog" data-saved-view-dialog
+            aria-labelledby="re-rack-saved-view-title">
+      <form class="re-rack-dialog-body" method="dialog" data-saved-view-form>
+        <h2 class="re-rack-dialog-title" id="re-rack-saved-view-title">Manage rack views</h2>
+        <p class="re-rack-dialog-summary">Saved views are shared with everyone who can view this rack.</p>
+        <label for="re-rack-saved-view-name" class="form-label mb-0">View name</label>
+        <input class="form-control" id="re-rack-saved-view-name" maxlength="120" required
+               data-saved-view-name autocomplete="off" autofocus>
+        <details class="re-rack-toolbar-settings" data-rack-toolbar-settings hidden>
+          <summary>Toolbar controls</summary>
+          <p class="text-secondary small mb-2 mt-2">
+            Choose which controls to show when this view is open.
+          </p>
+          <div class="re-rack-toolbar-choices" role="group" aria-label="Visible controls" data-rack-toolbar-choices></div>
+        </details>
+        <div class="d-flex flex-wrap gap-2">
+          <button class="btn btn-primary" type="submit" value="update" data-saved-view-update hidden>Save changes</button>
+          <button class="btn btn-outline-primary" type="submit" value="create" data-saved-view-create>Save as new view</button>
+        </div>
+        <div class="d-flex flex-wrap gap-2" data-saved-view-existing hidden>
+          <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-default>Set rack default</button>
+          <button class="btn btn-outline-danger btn-sm" type="button" data-saved-view-delete>Delete view…</button>
+        </div>
+        <div class="re-rack-delete-confirm" data-saved-view-delete-confirm hidden>
+          <p class="mb-2" data-saved-view-delete-message></p>
+          <div class="re-rack-dialog-actions">
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-delete-cancel>Keep view</button>
+            <button class="btn btn-danger btn-sm" type="button" data-saved-view-delete-yes>Delete view</button>
+          </div>
+        </div>
+        <p class="re-rack-dialog-error" role="alert" data-saved-view-error hidden></p>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-close>Close</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog class="re-rack-dialog" id="re-rack-selected-connections" data-selected-connections-dialog
+            aria-labelledby="re-rack-selected-connections-title"></dialog>
+    <dialog class="re-rack-dialog re-connection-filter-dialog" id="re-rack-connection-filter"
+            data-connection-filter-dialog></dialog>
     <dialog class="re-rack-dialog re-rack-history-dialog" data-history-dialog aria-labelledby="re-rack-history-title">
       <div class="re-rack-dialog-body">
         <h2 class="re-rack-dialog-title" id="re-rack-history-title">Cable history</h2>

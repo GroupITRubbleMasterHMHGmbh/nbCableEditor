@@ -18,7 +18,7 @@ from users.models import ObjectPermission
 from utilities.testing import TestCase
 
 from nbcableeditor.configuration import cable_custom_values
-from nbcableeditor.models import PortPlacement
+from nbcableeditor.models import CableEditorSettings, PortPlacement
 
 
 class RackLayoutTestCase(TestCase):
@@ -288,6 +288,13 @@ class RackLayoutTestCase(TestCase):
         self.assertEqual(ports[last.pk]["poeMode"], "")
         self.assertEqual(ports[last.pk]["poeType"], "")
 
+        CableEditorSettings.objects.update_or_create(pk=1, defaults={"options": {"features": {"vlan": False}}})
+        ports = get_ports()
+        self.assertEqual(ports[first.pk]["vlanMode"], "")
+        self.assertIsNone(ports[first.pk]["untaggedVlan"])
+        self.assertEqual(ports[first.pk]["taggedVlans"], [])
+        self.assertTrue(ports[first.pk]["managementOnly"])
+
     def test_vlan_editor_color_is_an_optional_validated_vlan_field(self):
         field = CustomField.objects.get(name="editorColorHex", object_types__app_label="ipam", object_types__model="vlan")
         self.assertEqual(field.type, "text")
@@ -346,9 +353,11 @@ class RackLayoutTestCase(TestCase):
             "poeType": remote.get_poe_type_display(),
             "deviceName": self.external.name,
             "deviceUrl": self.external.get_absolute_url(),
+            "filterDeviceId": self.external.pk,
             "portName": remote.name,
             "portUrl": remote.get_absolute_url(),
             "deviceType": self.device_type.model,
+            "deviceTypeId": self.device_type.pk,
             "rackName": self.other_rack.name,
             "vlanMode": InterfaceModeChoices.MODE_TAGGED,
             "vlanModeDisplay": remote.get_mode_display(),
@@ -364,7 +373,7 @@ class RackLayoutTestCase(TestCase):
         self.assertFalse(restricted["editable"])
         self.assertFalse(restricted["deletable"])
         expected = {**endpoint, "untaggedVlan": None, "taggedVlans": []}
-        del expected["deviceType"], expected["rackName"]
+        del expected["deviceType"], expected["deviceTypeId"], expected["rackName"]
         self.assertEqual(restricted["endpointA"], expected)
 
         self.restrict_view(Interface, {"device_id": self.device.pk})

@@ -8,7 +8,7 @@
       <div>
         <p class="text-secondary mb-1">Cable Editor</p>
         <h1 class="mb-1">Plugin settings</h1>
-        <p class="text-secondary mb-0">Set the starting view, drawing dimensions, and visible details for this NetBox instance.</p>
+        <p class="text-secondary mb-0">Set available rack features, starting views, drawing dimensions, and visible details for this NetBox instance.</p>
       </div>
       <div class="d-flex flex-wrap gap-2">
         <a class="btn btn-outline-primary" href="#cable-calculator">Cable Calculator</a>
@@ -31,7 +31,23 @@
             <p class="text-secondary">{{ description }}</p>
             <div class="row g-3">
               {% for field in fields %}
-                {% if field.widget_type == "checkboxselectmultiple" %}
+                {% if field.name == "features" or field.name == "toolbarDefaults" %}
+                  <fieldset class="col-12">
+                    <legend class="visually-hidden">{{ field.label }}</legend>
+                    <input type="hidden" name="{% if field.name == 'features' %}rackFeatureControls{% else %}rackToolbarControls{% endif %}" value="1">
+                    <div class="row g-2">
+                      {% for option in field %}
+                        <div class="col-sm-6 col-xl-3">
+                          <div class="form-check">
+                            {{ option.tag }}
+                            <label class="form-check-label" for="{{ option.id_for_label }}">{{ option.choice_label }}</label>
+                          </div>
+                        </div>
+                      {% endfor %}
+                    </div>
+                    {{ field.errors }}
+                  </fieldset>
+                {% elif field.widget_type == "checkboxselectmultiple" %}
                   <div class="col-sm-6 col-xl-4">
                     <fieldset class="border rounded p-3 h-100">
                       <legend class="float-none w-auto px-1 mb-2 fs-4">{{ field.label }}</legend>

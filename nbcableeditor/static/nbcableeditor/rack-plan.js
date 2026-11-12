@@ -2,10 +2,14 @@
   "use strict";
 
   globalThis.NbCableEditorPlan = ({editor, data, ports, portIdsByDataset, cables, get, node, button, httpUrl, requestMutation,
-    describe, setError, refresh, redraw, refreshRoutes, onViewChange, canEnter, locatePort}) => {
+    describe, setError, refresh, redraw, refreshRoutes, onViewChange, canEnter, locatePort,
+    planningControlsVisible = () => true}) => {
     const config = data.planning;
-    if (!config?.url || !get("plan-select")) return null;
-    const selector = get("plan-select");
+    if (!config) return null;
+    const selector = config.url ? get("plan-select") : null;
+    const reportButton = config.reportUrl ? get("plan-report") : null;
+    if (!selector && !reportButton) return null;
+    const calculatorAvailable = Boolean(config.reportUrl);
     const view = get("plan-view");
     const bar = get("plan-bar");
     const message = get("plan-message");
@@ -16,12 +20,14 @@
     const errorBox = get("plan-error");
     const preferencesKey = "nbcableeditor:planning:" + location.pathname;
     let preferences = {};
-    try {
-      preferences = JSON.parse(localStorage.getItem(preferencesKey)) || {};
-    } catch {
-      // Planning can run with browser storage disabled.
+    if (selector) {
+      try {
+        preferences = JSON.parse(localStorage.getItem(preferencesKey)) || {};
+      } catch {
+        // Planning can run with browser storage disabled.
+      }
+      opacity.value = preferences.opacity ?? opacity.value;
     }
-    opacity.value = preferences.opacity ?? opacity.value;
     let plans = [];
     let plan = null;
     let source = null;
@@ -36,6 +42,7 @@
 
     const inView = () => Boolean(plan && view.value !== "stock");
     const editing = () => inView() && plan.canEdit && !plan.applied;
+    const availableView = mode => planningControlsVisible() ? mode : "stock";
     const operations = () => plan?.operations ?? [];
     const portStatuses = {conflict: "Conflicting planned connections", connected: "Connected in plan",
       released: "Free after applying the plan"};
@@ -150,7 +157,7 @@
         notify("");
         return;
       }
-      if (mode !== "stock" && !canEnter()) {
+      if (availableView(mode) !== "stock" && !canEnter()) {
         syncPlans();
         notify("Apply or discard the pending live batch before opening the plan.", true);
         return;
@@ -159,7 +166,7 @@
       try {
         const result = await fetchJson(planUrl(id));
         if (sequence !== selectSequence) return;
-        view.value = mode;
+        view.value = availableView(mode);
         withPlan(result.plan);
         notify("");
       } catch (error) {
@@ -248,10 +255,10 @@
       if (plan) {
         if (plan.canEdit && !plan.applied) buttons.push(addButton("Rename", () => showNameForm("rename")));
         if (config.canAdd) buttons.push(addButton(plan.applied ? "New draft from profile" : "Duplicate", () => showNameForm("duplicate")));
-        if (plan.canEdit && !plan.applied) buttons.push(addButton("Routing profile", showProfile));
+        if (calculatorAvailable && plan.canEdit && !plan.applied) buttons.push(addButton("Routing profile", showProfile));
         if (plan.canDelete) buttons.push(addButton("Delete", confirmDelete, "outline-danger"));
       }
-      if (config.canMeasure) buttons.push(addButton("Rack measurements", showMeasurements));
+      if (calculatorAvailable && config.canMeasure) buttons.push(addButton("Rack measurements", showMeasurements));
       content.append(actions(...buttons));
     }
 
@@ -264,7 +271,7 @@
       name.maxLength = 120;
       const form = formWith(field("Plan name", name));
       let profile;
-      if (action === "create" && config.profiles?.length) {
+      if (calculatorAvailable && action === "create" && config.profiles?.length) {
         profile = selectInput(config.profiles.map(item => [item.id, item.name]));
         profile.value = config.defaultProfile || profile.value;
         form.append(field("Routing profile", profile));
@@ -276,7 +283,7 @@
         else if (action === "duplicate") result = await write({action, name: name.value.trim()});
         else result = await requestMutation(config.url, {action, name: name.value.trim(), profileId: profile?.value});
         if (!result.plan?.operations) result = await fetchJson(planUrl(result.plan.id));
-        view.value = canEnter() ? "mixed" : "stock";
+        view.value = canEnter() ? availableView("mixed") : "stock";
         withPlan(result.plan);
         dialog.close();
         notify("Plan saved.");
@@ -288,9 +295,12 @@
 
     function confirmDelete() {
       showDialog("Delete plan");
-      content.append(description(plan.applied
-        ? "Delete “" + plan.name + "” from this rack? Use Cable history to undo the wiring changes."
-        : "Delete “" + plan.name + "” and all of its draft changes?"));
+      const prompt = plan.applied
+        ? "Delete “" + plan.name + "” from this rack?"
+        : "Delete “" + plan.name + "” and all of its draft changes?";
+      const historyHint = plan.applied && data.settings?.features?.history !== false
+        ? " Use Cable history to undo the wiring changes." : "";
+      content.append(description(prompt + historyHint));
       content.append(actions(addButton("Cancel", showManagement), addButton("Delete plan", () => execute(async () => {
         await write({action: "delete"});
         plans = plans.filter(item => item.id !== plan.id);
@@ -533,8 +543,10 @@
         });
         form.append(palette);
       }
-      form.append(description("Leave length empty to defer the decision. The cable calculator suggests a catalog length in the review."));
-      if (recommendation != null) {
+      form.append(description(calculatorAvailable
+        ? "Leave length empty to defer the decision. The cable calculator suggests a catalog length in the review."
+        : "Leave length empty to record it later."));
+      if (calculatorAvailable && recommendation != null) {
         form.append(addButton("Use recommended " + formatLength(recommendation), () => {
           const meters = recommendation % 10 === 0;
           length.value = recommendation / (meters ? 1000 : 10);
@@ -821,7 +833,8 @@
 
     async function showPreview() {
       showDialog("Review and apply · " + plan.name);
-      content.append(description("Checking occupancy, permissions and cable lengths…"));
+      content.append(description(calculatorAvailable
+        ? "Checking occupancy, permissions and cable lengths…" : "Checking occupancy and permissions…"));
       await execute(async () => {
         const {preview} = await write({action: "preview"});
         content.replaceChildren();
@@ -831,11 +844,12 @@
           warnings.append(node("li", issue.severity === "error" ? "text-danger" : "text-warning", text));
         }
         if (warnings.childElementCount) content.append(warnings);
-        const recommendations = new Map((preview.report?.details ?? []).map(row => [String(row.id), row.recommendedMm]));
+        const report = calculatorAvailable ? preview.report : null;
+        const recommendations = new Map((report?.details ?? []).map(row => [String(row.id), row.recommendedMm]));
         content.append(renderChanges(operations(), {editable: editing(), recommended: recommendations}));
-        if (preview.report?.details?.length) {
+        if (report?.details?.length) {
           const summary = node("details", "mt-3");
-          summary.append(node("summary", "fw-semibold", "Cable lengths and findings"), reportTable(preview.report, "detail", "plan"));
+          summary.append(node("summary", "fw-semibold", "Cable lengths and findings"), reportTable(report, "detail", "plan"));
           content.append(summary);
         }
         const form = formWith();
@@ -854,8 +868,14 @@
       });
     }
 
+    reportButton?.addEventListener("click", () => showReport());
+    get("plan-dialog-close").addEventListener("click", () => { if (!pending) dialog.close(); });
+    dialog.addEventListener("cancel", event => { if (pending) event.preventDefault(); });
+    if (!selector) return null;
+
     selector.addEventListener("change", () => void load(selector.value));
     view.addEventListener("change", () => {
+      view.value = availableView(view.value);
       if (view.value !== "stock" && !canEnter()) {
         view.value = "stock";
         notify("Apply or discard the pending live batch before changing view.", true);
@@ -867,12 +887,9 @@
     });
     opacity.addEventListener("input", updateOpacity);
     get("plan-manage").addEventListener("click", showManagement);
-    get("plan-report").addEventListener("click", () => showReport());
     get("plan-changes").addEventListener("click", showChanges);
     get("plan-apply").addEventListener("click", () => void showPreview());
     get("plan-port-actions").addEventListener("click", () => showPortActions());
-    get("plan-dialog-close").addEventListener("click", () => { if (!pending) dialog.close(); });
-    dialog.addEventListener("cancel", event => { if (pending) event.preventDefault(); });
     dialog.addEventListener("close", () => {
       if (!draftCable) return;
       draftCable = null;
@@ -890,6 +907,15 @@
       } catch (error) {
         notify(error.message, true);
       }
+    }
+
+    function toolbarChanged() {
+      if (planningControlsVisible() || view.value === "stock") return;
+      view.value = "stock";
+      draftCable = null;
+      cancel();
+      refreshState();
+      notify("");
     }
 
     function startPointer(event, port) {
@@ -945,7 +971,7 @@
     }
 
     return {
-      init, inView, editing, markPorts, startPointer, movePointer, endPointer, cancelPointer, trackPointer,
+      init, toolbarChanged, inView, editing, markPorts, startPointer, movePointer, endPointer, cancelPointer, trackPointer,
       lineOperations: () => inView() ? operations().filter(item => item.action !== "delete" && !item.restricted) : [],
       portTooltip(port) {
         const state = plannedPort(port.id);

@@ -13,6 +13,7 @@ from nbcableeditor.configuration import (
     SETTINGS_PERMISSION, SETTINGS_ROUTE, CableEditorSettingsForm, cable_custom_values, nbcableeditor_options,
 )
 from nbcableeditor.models import CableEditorSettings
+from nbcableeditor.rack_features import RACK_FEATURE_LABELS, VIEW_TOOLBAR_FEATURES
 
 
 class CableEditorSettingsTest(TestCase):
@@ -117,6 +118,59 @@ class CableEditorSettingsTest(TestCase):
         CableEditorSettings.objects.filter(pk=1).update(options={"zoom": "fit"})
         self.assertEqual(nbcableeditor_options()[0]["zoom"], "horizontal-fit")
         self.assertEqual(CableEditorSettings.objects.get().options["zoom"], "fit")
+
+    def test_rack_feature_configuration_defaults_and_preserves_older_form_posts(self):
+        defaults, _ = nbcableeditor_options()
+        self.assertTrue(all(defaults["features"].values()))
+        self.assertTrue(all(defaults["toolbarDefaults"].values()))
+        self.add_permissions(SETTINGS_PERMISSION)
+        url = reverse(SETTINGS_ROUTE)
+        form_page = self.client.get(url)
+        self.assertContains(form_page, "Rack features")
+        self.assertContains(form_page, "Default rack toolbar")
+        self.assertEqual(form_page.context["form"].initial["features"], list(RACK_FEATURE_LABELS))
+        self.assertEqual(form_page.context["form"].initial["toolbarDefaults"], list(VIEW_TOOLBAR_FEATURES))
+        values = self.default_form_data()
+        values.update(face="rear", features=["calculator", "zoom"], rackFeatureControls="1",
+                      toolbarDefaults=["devices", "zoom"], rackToolbarControls="1")
+        self.assertRedirects(self.client.post(url, values), url)
+        stored = CableEditorSettings.objects.get().options
+        self.assertEqual(stored["features"], {key: key in {"calculator", "zoom"} for key in RACK_FEATURE_LABELS})
+        self.assertEqual(stored["toolbarDefaults"], {key: key in {"devices", "zoom"} for key in VIEW_TOOLBAR_FEATURES})
+        self.assertEqual(stored["face"], "rear")
+        data = self.client.get(reverse("plugins:nbcableeditor:rack", args=[self.rack.pk])).context["rack_data"]
+        self.assertEqual(data["settings"]["face"], "front")
+        self.assertEqual(data["settings"]["featureLabels"], RACK_FEATURE_LABELS)
+        self.assertEqual(data["settings"]["toolbarDefaults"], stored["toolbarDefaults"])
+        self.assertIsNone(data["savedViews"])
+        self.assertIsNone(data["planning"]["url"])
+        self.assertIsNotNone(data["planning"]["reportUrl"])
+        self.assertIsNone(data["history"])
+
+        del values["features"], values["rackFeatureControls"], values["toolbarDefaults"], values["rackToolbarControls"]
+        self.assertRedirects(self.client.post(url, values), url)
+        self.assertEqual(CableEditorSettings.objects.get().options["features"], stored["features"])
+        self.assertEqual(CableEditorSettings.objects.get().options["toolbarDefaults"], stored["toolbarDefaults"])
+        self.assertRedirects(self.client.post(url, {**values, "rackToolbarControls": "1"}), url)
+        self.assertFalse(any(CableEditorSettings.objects.get().options["toolbarDefaults"].values()))
+        self.assertEqual(CableEditorSettings.objects.get().options["features"], stored["features"])
+        self.assertRedirects(self.client.post(url, {**values, "rackFeatureControls": "1"}), url)
+        self.assertFalse(any(CableEditorSettings.objects.get().options["features"].values()))
+
+    def test_disabled_history_and_batch_workflows_are_rejected(self):
+        CableEditorSettings.objects.filter(pk=1).update(options={
+            "features": {"history": False, "quickConnect": False, "unplug": False},
+        })
+        url = reverse("plugins:nbcableeditor:cables", args=[self.rack.pk])
+        for payload in (
+            {"action": "history", "target": 0, "revision": 0},
+            {"action": "batch", "operations": [{"cable_id": None, "source": 1, "target": 2}]},
+            {"action": "batch", "operations": [{"action": "delete", "cable_id": 1}]},
+        ):
+            with self.subTest(action=payload):
+                response = self.client.post(url, payload, content_type="application/json")
+                self.assertEqual(response.status_code, 403)
+                self.assertIn("disabled", response.json()["error"])
 
     def test_create_named_calculator_profile_and_save_catalog_independently(self):
         self.add_permissions(SETTINGS_PERMISSION)

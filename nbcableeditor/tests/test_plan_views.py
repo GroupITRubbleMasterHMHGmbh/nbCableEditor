@@ -6,7 +6,7 @@ from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufa
 from users.models import ObjectPermission
 from utilities.testing import TestCase
 
-from nbcableeditor.models import RackCablePlan
+from nbcableeditor.models import CableEditorSettings, RackCablePlan
 
 
 class RackPlanningAPITests(TestCase):
@@ -85,6 +85,31 @@ class RackPlanningAPITests(TestCase):
         self.post(detail, "delete", revision=result["plan"]["revision"])
         self.assertFalse(RackCablePlan.objects.filter(pk=plan["id"]).exists())
         self.assertTrue(Cable.objects.filter(pk=cable.pk).exists())
+
+    def test_planning_and_calculator_can_be_disabled_independently(self):
+        plan = self.create()
+        detail = self.route("plan", plan["id"])
+        settings, _ = CableEditorSettings.objects.get_or_create(pk=1)
+        self.add_permissions("dcim.add_cable", "dcim.change_rack")
+        settings.options = {"features": {"planning": False}}
+        settings.save()
+        self.assertEqual(self.client.get(self.route("plans")).status_code, 403)
+        self.assertEqual(self.client.get(detail).status_code, 403)
+        self.assertEqual(self.client.get(self.route("calculator"), {"plan": plan["id"]}).status_code, 403)
+        self.assertEqual(self.client.get(self.route("calculator")).status_code, 200)
+        self.post(detail, "delete", 403, revision=0)
+
+        settings.options = {"features": {"calculator": False}}
+        settings.save()
+        self.assertEqual(self.client.get(self.route("calculator")).status_code, 403)
+        self.assertEqual(self.client.get(self.route("plans")).status_code, 200)
+        self.post(self.route("plans"), "geometry", 403, geometry={"mounting_depth_mm": 500})
+        self.post(detail, "save", 403, revision=0, profile={"options": {}})
+        self.post(detail, "save", revision=0, operations=[self.operation()])
+        preview = self.post(detail, "preview", revision=1)["preview"]
+        self.assertIsNone(preview["report"])
+        self.assertTrue(preview["token"])
+        self.post(detail, "apply", revision=1, token=preview["token"])
 
     def test_scope_permissions_and_live_occupancy(self):
         plan = self.create()

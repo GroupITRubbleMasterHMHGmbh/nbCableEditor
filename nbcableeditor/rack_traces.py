@@ -9,6 +9,7 @@ from .cable_views import port_key
 
 
 PORT_KINDS = {Interface: "interface", FrontPort: "front-port", RearPort: "rear-port"}
+NO_VLAN_DATA = {"vlanMode": "", "vlanModeDisplay": "", "untaggedVlan": None, "taggedVlans": []}
 MAX_TRACE_STEPS = 60
 MAX_TRACE_GROUP_SIZE = 32
 
@@ -131,18 +132,20 @@ def endpoint_data(user, port_nodes, vlans, rack_devices, rack_ports):
             **port_metadata(port),
             "deviceName": device_label(device, chassis_names) or "Unnamed device",
             "deviceUrl": device.get_absolute_url(),
+            "filterDeviceId": device.pk,
             "portName": port.name,
             "portUrl": port.get_absolute_url(),
         }
         if device.pk in rack_devices:
             row["deviceId"] = device.pk
         if isinstance(port, Interface):
-            row.update(vlans[port.pk])
+            row.update(vlans.get(port.pk, NO_VLAN_DATA))
         rack_key = port_key(type(port), port.pk)
         if rack_key in rack_ports:
             row["portId"] = rack_key
         if device.device_type_id in readable_types:
             row["deviceType"] = readable_types[device.device_type_id]
+            row["deviceTypeId"] = device.device_type_id
         if device.rack_id in readable_racks:
             row["rackName"] = readable_racks[device.rack_id]
         endpoints[key] = row
