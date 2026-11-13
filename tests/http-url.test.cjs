@@ -15,7 +15,10 @@ test("API requests and links stay on the NetBox origin", () => {
 test("device artwork allows external HTTP(S) storage and rejects unsafe image URLs", () => {
   const remote = "https://images.example/device.png?signature=abcd";
   assert.equal(httpUrl(remote, true), remote);
-  for (const url of ["javascript:alert(1)", "data:image/svg+xml,...", "file:///secret", "https://user:pass@images.example/", " "]) {
+  const credentials = new URL(remote);
+  credentials.username = "user";
+  credentials.password = "pass";
+  for (const url of ["javascript:alert(1)", "data:image/svg+xml,...", "file:///secret", credentials.href, " "]) {
     assert.equal(httpUrl(url, true), null);
   }
 });

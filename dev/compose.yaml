@@ -32,7 +32,7 @@ services:
       SECRET_KEY: dev-only-nbcableeditor-9Z7v-local-netbox-development-key
       ALLOWED_HOSTS: localhost 127.0.0.1 testserver
       SUPERUSER_NAME: test
-      SUPERUSER_EMAIL: test@example.invalid
+      SUPERUSER_EMAIL: ""
       SUPERUSER_PASSWORD: test
       PYTHONPATH: /plugin
     ports:

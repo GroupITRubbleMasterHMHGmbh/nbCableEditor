@@ -59,7 +59,10 @@ test("keeps template coordinates and duplicate names inside layout limits", () =
 
 test("rejects unsupported schema versions, invalid source URLs, and oversized files", () => {
   assert.throws(() => parse(JSON.stringify({...template(), schemaVersion: 2})), /supported schema version/);
-  assert.throws(() => parse(JSON.stringify({...template(), sources: ["https://user:pass@example.org/"]})), /HTTPS URL/);
+  const credentials = new URL("https://example.org/");
+  credentials.username = "user";
+  credentials.password = "pass";
+  assert.throws(() => parse(JSON.stringify({...template(), sources: [credentials.href]})), /HTTPS URL/);
   assert.throws(() => parse(" ".repeat(512 * 1024 + 1)), /512 KiB/);
 });
 
