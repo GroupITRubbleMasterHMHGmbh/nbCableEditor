@@ -3,7 +3,7 @@
 
   const SVG = "http://www.w3.org/2000/svg";
   const HTML = "http://www.w3.org/1999/xhtml";
-  const MAX_EDGE = 8192;
+  const MAX_EDGE = 15000;
   const exportStyles = `
     .re-rack, .re-rack *, .re-rack *::before, .re-rack *::after { box-sizing: border-box; }
     .re-rack-port-marker { appearance: none; margin: 0; }
@@ -11,10 +11,11 @@
     .re-rack-elevation-empty { margin: 0; padding: .5rem; }
   `;
 
-  function measure(board) {
+  function measure(board, metadata = []) {
     const {width, height} = board.getBoundingClientRect();
     if (!width || !height) throw new Error("The rack drawing is empty.");
-    return {width, height};
+    const header = metadata.length && globalThis.NbCableEditorExportMetadata.imageHeader(board.ownerDocument, width, metadata);
+    return {width, height: height + (header ? header.height : 0)};
   }
 
   function dimensions({width, height}, longestEdge) {
@@ -47,7 +48,7 @@
       href && new URL(href).pathname.endsWith("/nbcableeditor/" + name + ".css"));
     const rack = stylesheet("rack");
     if (!rack) throw new Error("The rack stylesheet is unavailable.");
-    return [stylesheet("artwork"), rack].filter(Boolean)
+    return [stylesheet("artwork"), rack, stylesheet("rack-external-location-ui")].filter(Boolean)
       .flatMap(sheet => Array.from(sheet.cssRules, rule => rule.cssText)).join("\n") + exportStyles;
   }
 
@@ -144,17 +145,22 @@
     return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
   }
 
-  async function png(snapshot, longestEdge) {
+  async function png(snapshot, longestEdge, metadata = []) {
     const image = new Image();
     image.src = imageUrl(snapshot);
     await image.decode();
     const canvas = document.createElement("canvas");
-    const {width, height} = dimensions(snapshot, longestEdge);
+    const header = metadata.length ? globalThis.NbCableEditorExportMetadata.imageHeader(document, snapshot.width, metadata) : null;
+    const contentHeight = snapshot.height + (header?.height ?? 0);
+    const {width, height} = dimensions({width: snapshot.width, height: contentHeight}, longestEdge);
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("The browser could not create the export image.");
-    context.drawImage(image, 0, 0, width, height);
+    const scaleY = height / contentHeight;
+    const top = header ? header.height * scaleY : 0;
+    context.drawImage(image, 0, top, width, height - top);
+    if (header) globalThis.NbCableEditorExportMetadata.paintHeader(context, header, width / snapshot.width, scaleY);
     return new Promise((resolve, reject) => {
       canvas.toBlob(blob => {
         if (blob) resolve(blob);

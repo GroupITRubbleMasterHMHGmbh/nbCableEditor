@@ -1,6 +1,14 @@
 from .models import CableEditorSettings
 
 
+TRACE_DESTINATION_FEATURES = {
+    "traceOtherRacks": "Show cable traces to other racks",
+    "traceOtherLocations": "Show cable traces to other locations",
+    "traceOtherSites": "Show cable traces to other sites",
+    "traceUnrackedDevices": "Show cable traces to not racked devices",
+}
+
+
 RACK_FEATURE_LABELS = {
     "viewOptions": "View options menu",
     "devices": "Device filter",
@@ -9,16 +17,20 @@ RACK_FEATURE_LABELS = {
     "rackSides": "Rack side selector",
     "lines": "Line mode selector",
     "selectedConnections": "Manual connection selection",
-    "connectionFilter": "Connection filter builder",
+    "connectionFilter": "Connection, interface and device rules",
     "routingStrategy": "Routing strategy selector",
     "deviceImages": "Device image controls",
     "interfaceHighlight": "Interface highlighting controls",
     "vlan": "VLAN filter, colors, and details",
     "zoom": "Zoom controls",
+    "positionIndicator": "Rack position indicator",
     "gapControls": "Rack gap controls",
     "panels": "Sidebar visibility controls",
     "virtualCombine": "Virtual combine control",
+    "externalLocations": "External cable locations",
+    **TRACE_DESTINATION_FEATURES,
     "trim": "Trim-to-ports control",
+    "compactEmptyUnits": "Compact empty rack units control",
     "quickConnect": "Quick connect mode",
     "unplug": "Batch unplug mode",
     "history": "Cable history, undo, and redo",

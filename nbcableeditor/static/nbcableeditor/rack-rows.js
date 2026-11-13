@@ -32,7 +32,11 @@
         const rows = [];
         for (const port of placed) {
           const current = rows.at(-1);
-          if (current && port.y - current[0].y <= tolerance) current.push(port);
+          const first = current?.[0];
+          const sameRow = first && (port.fallbackLayout || first.fallbackLayout
+            ? port.fallbackRow === first.fallbackRow
+            : port.y - first.y <= tolerance);
+          if (sameRow) current.push(port);
           else rows.push([port]);
         }
         for (const [index, row] of rows.entries()) {

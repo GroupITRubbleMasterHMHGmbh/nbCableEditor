@@ -5,7 +5,7 @@ from django.contrib.auth.decorators import login_required
 from django.urls import path
 from django.views.decorators.cache import never_cache
 
-from . import cable_views, layout_catalog, plan_views, port_views, saved_views, views
+from . import cable_shares, cable_views, global_views, layout_catalog, plan_views, port_views, rack_favorites, saved_views, views
 from .configuration import editor_settings
 
 
@@ -24,9 +24,14 @@ def _editor_path(route, view, kwargs=None, *, name):
 
 urlpatterns = [
     _editor_path("settings/", editor_settings, name="settings"),
+    _editor_path("my-racks/", rack_favorites.my_racks, name="my-racks"),
+    _editor_path("global-views/", global_views.global_view_designer, name="global-views"),
+    _editor_path("global-views/api/", global_views.global_views_api, name="global-views-api"),
+    _editor_path("global-views/rack-preview/<int:pk>/", global_views.global_view_rack_preview, name="global-views-rack-preview"),
     _editor_path("racks/<int:pk>/", views.rack_editor, name="rack"),
     _editor_path("racks/<int:pk>/views/", saved_views.rack_saved_views, name="rack-saved-views"),
     _editor_path("racks/<int:pk>/cables/", cable_views.mutate_cable, name="cables"),
+    _editor_path("racks/<int:pk>/cable-links/", cable_shares.create_cable_share, name="cable-links"),
     _editor_path("racks/<int:pk>/ports/", port_views.mutate_port, name="ports"),
     _editor_path("racks/<int:pk>/plans/", plan_views.rack_plans, name="plans"),
     _editor_path("racks/<int:pk>/plans/<int:plan_id>/", plan_views.rack_plan, name="plan"),

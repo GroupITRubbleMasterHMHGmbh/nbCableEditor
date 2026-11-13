@@ -96,7 +96,7 @@
     return false;
   }
 
-  function sweepPositions(axis, center, length, low, high, previous, segments) {
+  function sweepPositions(axis, center, length, low, high, previous, segments, clearance) {
     const choices = new Set();
     function add(position) {
       if (Number.isFinite(position)) choices.add(clamp(position, low, high));
@@ -105,7 +105,7 @@
     add(center - length / 2);
     add(center - length / 4);
     add(center - length * .75);
-    for (const offset of [CLEARANCE + 1, 30, 68]) {
+    for (const offset of [clearance + 1, clearance + 6, clearance + 44]) {
       add(center + offset);
       add(center - length - offset);
     }
@@ -120,15 +120,15 @@
     }
     const near = Array.from(endpoints).sort((a, b) => Math.abs(center - a) - Math.abs(center - b) || a - b);
     for (const value of near.slice(0, 6)) {
-      add(value + CLEARANCE + SWEEP_MARGIN);
-      add(value - length - CLEARANCE - SWEEP_MARGIN);
+      add(value + clearance + SWEEP_MARGIN);
+      add(value - length - clearance - SWEEP_MARGIN);
     }
     return choices;
   }
 
-  function sweep(axis, position, size, otherSize, low, high, center, previous, segments, consider) {
+  function sweep(axis, position, size, otherSize, low, high, center, previous, segments, clearance, consider) {
     const otherAxis = axis === "x" ? "y" : "x";
-    const gap = CLEARANCE + SWEEP_MARGIN;
+    const gap = clearance + SWEEP_MARGIN;
     const forbidden = [];
     for (const {a, b, dx, dy} of segments) {
       const interval = {from: 0, to: 1};
@@ -165,15 +165,27 @@
     tryGap(next, high);
   }
 
-  function place({anchor, width, height, bounds, segments, previous}) {
+  function segmentBox(a, b) {
+    return {a, b, dx: b.x - a.x, dy: b.y - a.y, ...rectFor(a, b)};
+  }
+
+  function portEdges({left, top, right, bottom}) {
+    const corners = [{x: left, y: top}, {x: right, y: top}, {x: right, y: bottom}, {x: left, y: bottom}];
+    return corners.map((corner, index) => segmentBox(corner, corners[(index + 1) % corners.length]));
+  }
+
+  function place({anchor, width, height, bounds, segments, previous, portBounds, clearance = CLEARANCE}) {
     const maxLeft = bounds.right - width;
     const maxTop = bounds.bottom - height;
     if (!(width > 0 && height > 0) || maxLeft < bounds.left || maxTop < bounds.top) return null;
 
-    const paths = segments.map(({a, b}) => ({a, b, dx: b.x - a.x, dy: b.y - a.y, ...rectFor(a, b)}));
+    const paths = segments.map(({a, b}) => segmentBox(a, b));
     // Keep the anchor and room for the leader outside the tooltip even when no
     // visible segment occupies its exact coordinates.
-    const obstacles = [...paths, {a: anchor, b: anchor, dx: 0, dy: 0, ...rectFor(anchor, anchor)}];
+    const obstacles = [...paths, segmentBox(anchor, anchor)];
+    const portSegments = portBounds ? portEdges(portBounds) : [];
+    const sweepObstacles = [...obstacles, ...portSegments];
+    const sweepStops = [...paths, ...portSegments];
     let best = null;
     let bestScore = Infinity;
     let bestDistance = Infinity;
@@ -192,8 +204,8 @@
       const movement = previous ? Math.min(18, Math.hypot(left - previous.left, top - previous.top) * .12) : 0;
       const base = distance + centering + movement;
       if (base >= bestScore) return;
-      const padded = {left: left - CLEARANCE, top: top - CLEARANCE, right: right + CLEARANCE, bottom: bottom + CLEARANCE};
-      if (obstacles.some(segment => blocksTooltip(segment, padded))) return;
+      const padded = {left: left - clearance, top: top - clearance, right: right + clearance, bottom: bottom + clearance};
+      if ((portBounds && overlaps(portBounds, padded)) || obstacles.some(segment => blocksTooltip(segment, padded))) return;
       const score = base + (crossesConnector(anchor, edge, paths) ? 20 : 0);
       if (score >= bestScore) return;
       best = {left, top, edge};
@@ -201,7 +213,7 @@
       bestDistance = distance;
     }
 
-    const gap = CLEARANCE + 5;
+    const gap = clearance + 5;
     if (previous) {
       consider(previous.left, previous.top);
       if (best && bestDistance <= gap + 2 && bestScore < gap + 7) return best;
@@ -219,11 +231,11 @@
     }
     if (best && bestDistance <= gap + 2 && bestScore < gap + 8) return best;
 
-    for (const left of sweepPositions("x", anchor.x, width, bounds.left, maxLeft, previous?.left, paths)) {
-      sweep("x", left, width, height, bounds.top, maxTop, anchor.y, previous?.top, obstacles, consider);
+    for (const left of sweepPositions("x", anchor.x, width, bounds.left, maxLeft, previous?.left, sweepStops, clearance)) {
+      sweep("x", left, width, height, bounds.top, maxTop, anchor.y, previous?.top, sweepObstacles, clearance, consider);
     }
-    for (const top of sweepPositions("y", anchor.y, height, bounds.top, maxTop, previous?.top, paths)) {
-      sweep("y", top, height, width, bounds.left, maxLeft, anchor.x, previous?.left, obstacles, consider);
+    for (const top of sweepPositions("y", anchor.y, height, bounds.top, maxTop, previous?.top, sweepStops, clearance)) {
+      sweep("y", top, height, width, bounds.left, maxLeft, anchor.x, previous?.left, sweepObstacles, clearance, consider);
     }
     return best;
   }

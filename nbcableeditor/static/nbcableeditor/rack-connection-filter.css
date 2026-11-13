@@ -47,12 +47,21 @@
   gap: .4rem;
 }
 
+.re-connection-filter-negation {
+  margin: 0 .3rem .32rem;
+  white-space: nowrap;
+}
+
 .re-connection-filter-fields,
 .re-connection-filter-sides {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
   align-items: start;
   gap: .5rem;
+}
+
+.re-connection-filter-sides {
+  grid-template-columns: repeat(auto-fit, minmax(min(21rem, 100%), 1fr));
 }
 
 .re-connection-filter-sides > fieldset {
@@ -69,8 +78,13 @@
 
 .re-connection-filter-multi {
   min-width: 0;
-  width: fit-content;
   max-width: 100%;
+}
+
+.re-connection-filter-fields > .re-connection-filter-multi > summary {
+  width: 100%;
+  text-align: start;
+  white-space: normal;
 }
 
 .re-connection-filter-multi[open] {

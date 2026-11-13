@@ -1,4 +1,4 @@
-{% extends 'base/layout.html' %}
+{% extends rack_base_template|default:'base/layout.html' %}
 {% load static %}
 
 {% block title %}Cable Editor · {{ rack }}{% endblock %}
@@ -8,6 +8,12 @@
   <link rel="stylesheet" href="{% static 'nbcableeditor/artwork.css' %}?v={{ editor_version }}">
   <link rel="stylesheet" href="{% static 'nbcableeditor/rack.css' %}?v={{ editor_version }}">
   <link rel="stylesheet" href="{% static 'nbcableeditor/rack-connection-filter.css' %}?v={{ editor_version }}">
+  <link rel="stylesheet" href="{% static 'nbcableeditor/rack-rule-editor.css' %}?v={{ editor_version }}">
+  <link rel="stylesheet" href="{% static 'nbcableeditor/rack-position-indicator.css' %}?v={{ editor_version }}">
+  <link rel="stylesheet" href="{% static 'nbcableeditor/rack-external-location-ui.css' %}?v={{ editor_version }}">
+  {% if global_view_preview %}
+    <link rel="stylesheet" href="{% static 'nbcableeditor/global-views.css' %}?v={{ editor_version }}">
+  {% endif %}
 {% endblock %}
 
 {% block javascript %}
@@ -16,11 +22,20 @@
   <script src="{% static 'nbcableeditor/rack-corridors.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-routing.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-rows.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-compact-units.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-fallback-layout.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-viewport.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-position-indicator.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-tooltip.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-cable-path.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-external-locations.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-external-location-ui.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-bundles.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-virtual-combine.js' %}?v={{ editor_version }}" defer></script>
+  {% if rack_data.settings.features.export %}
+    <script src="{% static 'nbcableeditor/qrcode-generator.js' %}?v={{ editor_version }}" defer></script>
+  {% endif %}
+  <script src="{% static 'nbcableeditor/rack-export-metadata.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-export.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-print-labels.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-export-list.js' %}?v={{ editor_version }}" defer></script>
@@ -28,6 +43,8 @@
   <script src="{% static 'nbcableeditor/rack-vlan-colors.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-plan.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-connection-filter.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-rules.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-rule-editor.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-toolbar.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack-saved-views.js' %}?v={{ editor_version }}" defer></script>
   <script src="{% static 'nbcableeditor/rack.js' %}?v={{ editor_version }}" defer></script>
@@ -35,11 +52,12 @@
 
 {% block content %}
   <div class="re-rack" id="re-rack-editor" lang="en" data-cable-url="{{ cable_url }}" data-port-url="{{ port_url }}"
+       {% if global_view_preview %}data-global-view-preview{% endif %}
        data-routing-worker-url="{% static 'nbcableeditor/rack-routing-worker.js' %}?v={{ editor_version }}">
     {% csrf_token %}
     <noscript><p class="alert alert-warning mt-3">Enable JavaScript to use Cable Editor.</p></noscript>
     <div class="re-rack-workspace" data-workspace hidden>
-      <nav class="card re-rack-toolbar" aria-label="Cable Editor controls">
+      <nav class="card re-rack-toolbar" aria-label="Cable Editor controls" {% if global_view_preview %}hidden inert{% endif %}>
         <div class="re-rack-toolbar-controls">
           <h1 class="re-rack-toolbar-title">
             <a href="{{ rack.get_absolute_url }}" title="Open rack in NetBox">{{ rack }} <i class="mdi mdi-open-in-new" aria-hidden="true"></i></a>
@@ -51,6 +69,9 @@
             </select>
             <button class="btn btn-outline-primary btn-sm" type="button" data-saved-view-manage
                     aria-haspopup="dialog" aria-controls="re-rack-saved-view-dialog" hidden>Manage views…</button>
+            <div class="re-rack-view-shortcuts" data-saved-view-shortcuts hidden>
+              <div class="btn-group" role="group" aria-label="Global rack views" data-saved-view-buttons></div>
+            </div>
           </div>
           <div class="re-rack-filter-controls">
             <details class="re-rack-device-filter" data-device-filter data-rack-feature="devices">
@@ -144,9 +165,39 @@
                   <input class="form-check-input" type="checkbox" data-view-trim aria-controls="re-rack-board">
                   <span class="form-check-label">Trim width to visible ports</span>
                 </label>
+                <label class="form-check" data-rack-feature="compactEmptyUnits">
+                  <input class="form-check-input" type="checkbox" data-view-compact-empty-units
+                         aria-controls="re-rack-board">
+                  <span class="form-check-label">Compact empty rack units</span>
+                </label>
                 <label class="form-check" data-rack-feature="virtualCombine">
                   <input class="form-check-input" type="checkbox" data-view-virtual-combine aria-controls="re-rack-board">
                   <span class="form-check-label">Virtual combine <small class="text-secondary">(experimental)</small></span>
+                </label>
+                <label class="form-check" data-rack-feature="externalLocations">
+                  <input class="form-check-input" type="checkbox" data-view-external-locations aria-controls="re-rack-board">
+                  <span class="form-check-label">Show external cable locations</span>
+                </label>
+                <label class="form-check" data-rack-feature="traceOtherRacks">
+                  <input class="form-check-input" type="checkbox" data-view-trace-other-racks aria-controls="re-rack-board">
+                  <span class="form-check-label">Show cable traces to other racks</span>
+                </label>
+                <label class="form-check" data-rack-feature="traceOtherLocations">
+                  <input class="form-check-input" type="checkbox" data-view-trace-other-locations aria-controls="re-rack-board">
+                  <span class="form-check-label">Show cable traces to other locations</span>
+                </label>
+                <label class="form-check" data-rack-feature="traceOtherSites">
+                  <input class="form-check-input" type="checkbox" data-view-trace-other-sites aria-controls="re-rack-board">
+                  <span class="form-check-label">Show cable traces to other sites</span>
+                </label>
+                <label class="form-check" data-rack-feature="traceUnrackedDevices">
+                  <input class="form-check-input" type="checkbox" data-view-trace-unracked-devices aria-controls="re-rack-board">
+                  <span class="form-check-label">Show cable traces to not racked devices</span>
+                </label>
+                <label class="form-check" data-rack-feature="positionIndicator">
+                  <input class="form-check-input" type="checkbox" data-view-position-indicator
+                         aria-controls="re-rack-position-indicator" checked>
+                  <span class="form-check-label">Position indicator</span>
                 </label>
                 <div class="re-rack-port-legend" role="group" aria-label="Port status legend">
                   <span class="re-rack-legend"><span class="re-rack-dot re-rack-dot-free"></span> Free</span>
@@ -168,7 +219,13 @@
                     aria-haspopup="dialog" aria-controls="re-rack-selected-connections" hidden>Choose connections…</button>
             <button class="btn btn-outline-primary btn-sm" type="button" data-connection-filter-open
                     data-rack-feature="connectionFilter"
-                    aria-haspopup="dialog" aria-controls="re-rack-connection-filter" hidden>Connection filter…</button>
+                    aria-haspopup="dialog" aria-controls="re-rack-connection-filter">Connection Rules…</button>
+            <button class="btn btn-outline-primary btn-sm" type="button" data-port-filter-open
+                    data-rack-feature="connectionFilter" aria-haspopup="dialog"
+                    aria-controls="re-rack-port-filter">Interface Rules…</button>
+            <button class="btn btn-outline-primary btn-sm" type="button" data-device-rules-open
+                    data-rack-feature="connectionFilter" aria-haspopup="dialog"
+                    aria-controls="re-rack-device-rules">Device Rules…</button>
           </div>
           <div class="btn-group re-rack-mode-buttons" role="group" aria-label="Cable editing mode"
                data-rack-feature-any="quickConnect unplug">
@@ -230,22 +287,6 @@
             </div>
           {% endif %}
           <div class="re-rack-toolbar-actions">
-            <div class="re-rack-zoom-control" data-rack-feature="zoom">
-              <label for="re-rack-zoom" class="small">Zoom</label>
-              <select class="form-select form-select-sm no-ts" id="re-rack-zoom" data-zoom>
-                <optgroup label="Fit to view">
-                  {% for value, label in rack_zoom_choices|slice:":3" %}
-                    <option value="{{ value }}">{{ label }}</option>
-                  {% endfor %}
-                </optgroup>
-                <optgroup label="Fixed zoom">
-                  {% for value, label in rack_zoom_choices|slice:"3:" %}
-                    <option value="{{ value }}">{{ label }}</option>
-                  {% endfor %}
-                </optgroup>
-                <option value="custom" hidden>Custom</option>
-              </select>
-            </div>
             <div class="btn-group" role="group" aria-label="Cable change history" data-rack-feature="history">
               <button type="button" class="btn btn-sm btn-outline-secondary re-rack-icon-button" data-history-undo
                       aria-label="Undo" title="Undo" disabled><i class="mdi mdi-undo" aria-hidden="true"></i></button>
@@ -260,6 +301,11 @@
         </div>
         <p class="re-rack-quick-status text-muted small mb-0" role="status" data-quick-status hidden></p>
         <p class="small mb-0" role="status" data-saved-view-status hidden></p>
+        <div class="re-rack-filter-preview" data-filter-preview hidden>
+          <span data-filter-preview-label role="status"></span>
+          <button class="btn btn-sm btn-primary" type="button" data-filter-preview-back>Back to rules</button>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-filter-preview-cancel>Cancel preview</button>
+        </div>
         {% if rack_data.planning %}
           <p class="re-rack-plan-message small mb-0" role="status" data-plan-message hidden></p>
         {% endif %}
@@ -295,30 +341,69 @@
           <p class="re-rack-bundle-title" data-bundle-title hidden></p>
           <div class="re-rack-bundle-cables" data-bundle-cables role="group" aria-label="Cables in selected bundle" hidden></div>
         </div>
-        <div class="re-rack-scroll" data-scroll tabindex="0" aria-label="Scrollable rack elevations"
-             aria-description="Drag an empty area to pan.">
-          <div class="re-rack-board" id="re-rack-board" data-board data-rack-face="front">
-            <div class="re-rack-unit-column" role="group" aria-label="Rack units">
-              <h2 class="re-rack-face-heading" aria-hidden="true">U</h2>
-              <div class="re-rack-units" data-unit-elevation></div>
+        <div class="re-rack-canvas">
+          <div class="re-rack-viewport-controls" role="group" aria-label="Rack zoom and pan" data-rack-feature="zoom">
+            <label for="re-rack-zoom" class="visually-hidden">Zoom</label>
+            <select class="form-select form-select-sm no-ts" id="re-rack-zoom" data-zoom>
+              <optgroup label="Fit to view">
+                {% for value, label in rack_zoom_choices|slice:":3" %}
+                  <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </optgroup>
+              <optgroup label="Fixed zoom">
+                {% for value, label in rack_zoom_choices|slice:"3:" %}
+                  <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </optgroup>
+              <option value="custom" hidden>Custom</option>
+            </select>
+            <div class="re-rack-viewport-buttons">
+              <button type="button" class="btn btn-sm" data-pan-toggle aria-pressed="false"
+                      aria-label="Pan rack" title="Pan rack" aria-controls="re-rack-board"
+                      aria-description="Drag or use the arrow keys to pan. Press Escape to exit.">
+                <i class="mdi mdi-hand-back-right-outline" aria-hidden="true"></i>
+              </button>
+              <button type="button" class="btn btn-sm" data-zoom-in aria-label="Zoom in" title="Zoom in">+</button>
+              <button type="button" class="btn btn-sm" data-zoom-out aria-label="Zoom out" title="Zoom out">−</button>
             </div>
-            <section class="re-rack-face" id="re-rack-face-front" data-rack-face-panel="front"
-                     aria-label="Front rack elevation">
-              <h2 class="re-rack-face-heading">Front</h2>
-              <div class="re-rack-units" data-elevation="front"></div>
-            </section>
-            <div class="re-rack-gutter" data-gutter aria-hidden="true" hidden></div>
-            <section class="re-rack-face" id="re-rack-face-rear" data-rack-face-panel="rear"
-                     aria-label="Rear rack elevation" hidden>
-              <h2 class="re-rack-face-heading">Rear</h2>
-              <div class="re-rack-units" data-elevation="rear"></div>
-            </section>
-            <svg class="re-rack-wires" data-wires aria-hidden="true"></svg>
           </div>
+          <div class="re-rack-scroll" data-scroll tabindex="0" aria-label="Scrollable rack elevations"
+               aria-description="Use the mouse wheel to scroll vertically. Drag an empty area to pan.">
+            <div class="re-rack-board" id="re-rack-board" data-board data-rack-face="front">
+              <div class="re-rack-unit-column" role="group" aria-label="Rack units">
+                <h2 class="re-rack-face-heading" aria-hidden="true">U</h2>
+                <div class="re-rack-units" data-unit-elevation></div>
+              </div>
+              <section class="re-rack-face" id="re-rack-face-front" data-rack-face-panel="front"
+                       aria-label="Front rack elevation">
+                <h2 class="re-rack-face-heading">Front</h2>
+                <div class="re-rack-units" data-elevation="front"></div>
+              </section>
+              <div class="re-rack-gutter" data-gutter aria-hidden="true" hidden></div>
+              <section class="re-rack-face" id="re-rack-face-rear" data-rack-face-panel="rear"
+                       aria-label="Rear rack elevation" hidden>
+                <h2 class="re-rack-face-heading">Rear</h2>
+                <div class="re-rack-units" data-elevation="rear"></div>
+              </section>
+              <svg class="re-rack-wires" data-wires aria-hidden="true"></svg>
+              <div class="re-rack-external-location-layer" data-external-location-layer></div>
+            </div>
+          </div>
+          <div class="re-rack-external-location-tooltip" data-external-location-tooltip hidden></div>
+          <aside class="re-rack-position-indicator" id="re-rack-position-indicator" data-position-indicator
+                 data-rack-feature="positionIndicator" aria-label="Rack overview" hidden>
+            <div class="re-rack-position-track" data-position-track>
+              <div class="re-rack-position-faces" data-position-faces aria-hidden="true"></div>
+              <div class="re-rack-position-devices" data-position-devices></div>
+              <div class="re-rack-position-viewport" data-position-viewport role="slider" tabindex="0"
+                   aria-label="Rack vertical position" aria-orientation="vertical"></div>
+            </div>
+          </aside>
         </div>
       </section>
 
-      <aside class="card re-rack-panel re-rack-inspector" aria-label="Cable and interface controls" data-inspector>
+      <aside class="card re-rack-panel re-rack-inspector" aria-label="Cable and interface controls" data-inspector
+             {% if global_view_preview %}hidden inert{% endif %}>
         <div class="re-rack-tooltip-dock" data-cable-tooltip-dock hidden></div>
         <div class="re-rack-status">
           <div data-status role="status" aria-live="polite"></div>
@@ -481,6 +566,9 @@
               <option value="a5">A5</option>
               <option value="a4" selected>A4</option>
               <option value="a3">A3</option>
+              <option value="a2">A2</option>
+              <option value="a1">A1</option>
+              <option value="a0">A0</option>
               <option value="letter">Letter</option>
               <option value="legal">Legal</option>
             </select>
@@ -514,10 +602,34 @@
           <div data-export-custom-field hidden>
             <label class="form-label" for="re-rack-export-custom">Pixels</label>
             <input class="form-control" id="re-rack-export-custom" data-export-custom type="number"
-                   min="320" max="6000" step="1" value="2400" required disabled>
+                   min="320" max="15000" step="1" value="2400" required disabled>
           </div>
           <output class="re-rack-dialog-summary re-rack-export-wide" data-export-dimensions></output>
         </div>
+        <fieldset class="re-rack-export-options">
+          <legend class="form-label">Rack details</legend>
+          <label class="form-check">
+            <input class="form-check-input" type="checkbox" data-export-location
+                   {% if not rack_data.rackLocation %}disabled{% endif %}>
+            <span class="form-check-label">Location</span>
+          </label>
+          <label class="form-check">
+            <input class="form-check-input" type="checkbox" data-export-rack-id>
+            <span class="form-check-label">Rack ID</span>
+          </label>
+          <label class="form-check">
+            <input class="form-check-input" type="checkbox" data-export-rack-url>
+            <span class="form-check-label">Rack URL</span>
+          </label>
+          <label class="form-check">
+            <input class="form-check-input" type="checkbox" data-export-editor-url>
+            <span class="form-check-label">Cable Editor URL</span>
+          </label>
+          <label class="form-check re-rack-export-wide">
+            <input class="form-check-input" type="checkbox" data-export-qr disabled>
+            <span class="form-check-label">Include QR codes for selected URLs</span>
+          </label>
+        </fieldset>
         <p class="re-rack-dialog-error" role="alert" data-export-error hidden></p>
         <div class="re-rack-dialog-actions">
           <button type="button" class="btn btn-outline-secondary" data-export-cancel>Cancel</button>
@@ -651,6 +763,7 @@
         </div>
         <div class="re-rack-dialog-actions">
           <button class="btn btn-outline-danger me-auto" type="button" data-modal-delete hidden>Remove cable…</button>
+          <button class="btn btn-outline-primary" type="button" data-modal-share hidden>Copy cable link</button>
           <button class="btn btn-outline-secondary" type="button" data-modal-close autofocus>Close</button>
         </div>
       </div>
@@ -770,32 +883,44 @@
             aria-labelledby="re-rack-saved-view-title">
       <form class="re-rack-dialog-body" method="dialog" data-saved-view-form>
         <h2 class="re-rack-dialog-title" id="re-rack-saved-view-title">Manage rack views</h2>
-        <p class="re-rack-dialog-summary">Saved views are shared with everyone who can view this rack.</p>
-        <label for="re-rack-saved-view-name" class="form-label mb-0">View name</label>
-        <input class="form-control" id="re-rack-saved-view-name" maxlength="120" required
-               data-saved-view-name autocomplete="off" autofocus>
-        <details class="re-rack-toolbar-settings" data-rack-toolbar-settings hidden>
-          <summary>Toolbar controls</summary>
-          <p class="text-secondary small mb-2 mt-2">
-            Choose which controls to show when this view is open.
-          </p>
-          <div class="re-rack-toolbar-choices" role="group" aria-label="Visible controls" data-rack-toolbar-choices></div>
-        </details>
-        <div class="d-flex flex-wrap gap-2">
-          <button class="btn btn-primary" type="submit" value="update" data-saved-view-update hidden>Save changes</button>
-          <button class="btn btn-outline-primary" type="submit" value="create" data-saved-view-create>Save as new view</button>
-        </div>
-        <div class="d-flex flex-wrap gap-2" data-saved-view-existing hidden>
-          <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-default>Set rack default</button>
-          <button class="btn btn-outline-danger btn-sm" type="button" data-saved-view-delete>Delete view…</button>
-        </div>
-        <div class="re-rack-delete-confirm" data-saved-view-delete-confirm hidden>
-          <p class="mb-2" data-saved-view-delete-message></p>
-          <div class="re-rack-dialog-actions">
-            <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-delete-cancel>Keep view</button>
-            <button class="btn btn-danger btn-sm" type="button" data-saved-view-delete-yes>Delete view</button>
+        <fieldset class="d-grid gap-2 m-0 p-0 border-0" data-saved-view-shared hidden disabled>
+          <legend class="visually-hidden">Shared rack views</legend>
+          <p class="re-rack-dialog-summary">Saved views are shared with everyone who can view this rack.</p>
+          <label for="re-rack-saved-view-name" class="form-label mb-0">View name</label>
+          <input class="form-control" id="re-rack-saved-view-name" maxlength="120" required
+                 data-saved-view-name autocomplete="off" autofocus>
+          <details class="re-rack-toolbar-settings" data-rack-toolbar-settings hidden>
+            <summary>Toolbar controls</summary>
+            <p class="text-secondary small mb-2 mt-2">
+              Choose which controls to show when this view is open.
+            </p>
+            <div class="re-rack-toolbar-choices" role="group" aria-label="Visible controls" data-rack-toolbar-choices></div>
+          </details>
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-primary" type="submit" value="update" data-saved-view-update hidden>Save changes</button>
+            <button class="btn btn-outline-primary" type="submit" value="create" data-saved-view-create>Save as new view</button>
           </div>
-        </div>
+          <div class="d-flex flex-wrap gap-2" data-saved-view-existing hidden>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-default>Set rack default</button>
+            <button class="btn btn-outline-danger btn-sm" type="button" data-saved-view-delete>Delete view…</button>
+          </div>
+          <div class="re-rack-delete-confirm" data-saved-view-delete-confirm hidden>
+            <p class="mb-2" data-saved-view-delete-message></p>
+            <div class="re-rack-dialog-actions">
+              <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-delete-cancel>Keep view</button>
+              <button class="btn btn-danger btn-sm" type="button" data-saved-view-delete-yes>Delete view</button>
+            </div>
+          </div>
+        </fieldset>
+        <button class="btn btn-outline-primary btn-sm" type="button" data-saved-view-global hidden>Open in global view designer…</button>
+        <section class="border-top pt-2 mt-1" aria-labelledby="re-rack-personal-reset-title">
+          <h3 class="h4 mb-1" id="re-rack-personal-reset-title">Reset personal view</h3>
+          <p class="re-rack-dialog-summary">Clear this rack’s personal settings in this browser.</p>
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-reset-system>Use system defaults</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-reset-rack-default hidden>Use rack default</button>
+          </div>
+        </section>
         <p class="re-rack-dialog-error" role="alert" data-saved-view-error hidden></p>
         <div class="re-rack-dialog-actions">
           <button class="btn btn-outline-secondary btn-sm" type="button" data-saved-view-close>Close</button>
@@ -806,6 +931,18 @@
             aria-labelledby="re-rack-selected-connections-title"></dialog>
     <dialog class="re-rack-dialog re-connection-filter-dialog" id="re-rack-connection-filter"
             data-connection-filter-dialog></dialog>
+    <dialog class="re-rack-dialog re-connection-filter-dialog" id="re-rack-port-filter" data-port-filter-dialog></dialog>
+    <dialog class="re-rack-dialog re-connection-filter-dialog" id="re-rack-device-rules" data-device-rules-dialog></dialog>
+    <dialog class="re-rack-dialog" data-cable-link-dialog aria-labelledby="re-rack-cable-link-title">
+      <div class="re-rack-dialog-body">
+        <h2 class="re-rack-dialog-title" id="re-rack-cable-link-title">Cable link</h2>
+        <label for="re-rack-cable-link-url">Copy this link</label>
+        <input class="form-control" id="re-rack-cable-link-url" type="url" readonly data-cable-link-url>
+        <div class="re-rack-dialog-actions">
+          <button class="btn btn-outline-secondary btn-sm" type="button" data-cable-link-close>Close</button>
+        </div>
+      </div>
+    </dialog>
     <dialog class="re-rack-dialog re-rack-history-dialog" data-history-dialog aria-labelledby="re-rack-history-title">
       <div class="re-rack-dialog-body">
         <h2 class="re-rack-dialog-title" id="re-rack-history-title">Cable history</h2>

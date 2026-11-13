@@ -13,16 +13,18 @@ from extras.models import CustomField
 from .calculator_settings import calculator_settings_context, update_calculator_settings
 from .layout_placeholders import object_name
 from .models import CableEditorSettings
-from .rack_features import RACK_FEATURE_LABELS, VIEW_TOOLBAR_FEATURES, normalize_rack_flags
+from .rack_features import RACK_FEATURE_LABELS, TRACE_DESTINATION_FEATURES, VIEW_TOOLBAR_FEATURES, normalize_rack_flags
 
 
 SETTINGS_PERMISSION = CableEditorSettings.CHANGE_PERMISSION
 SETTINGS_ROUTE = "plugins:nbcableeditor:settings"
 
+ZOOM_REFERENCE_SCALE = 1.75
+LEGACY_FIXED_ZOOM_SCALES = ("0.5", "0.75", "1", "1.25", "1.5", "2", "2.5", "3")
 ZOOM_CHOICES = (
     ("auto", "Auto"), ("horizontal-fit", "Horizontal Fit"), ("vertical-fit", "Vertical Fit"),
-    ("0.5", "50%"), ("0.75", "75%"), ("1", "100%"), ("1.25", "125%"), ("1.5", "150%"),
-    ("1.75", "175%"), ("2", "200%"), ("2.5", "250%"), ("3", "300%"),
+    *((f"{percent * ZOOM_REFERENCE_SCALE / 100:g}", f"{percent}%")
+      for percent in (25, 50, 75, 100, 125, 150, 175, 200, 250, 300)),
 )
 DIRECTORY_FIELDS = (
     ("vlan", "VLANs"), ("peer-vlan", "Peer VLANs"), ("label", "Label"),
@@ -52,7 +54,8 @@ SETTINGS_GROUPS = (
     )),
     ("View defaults", "Starting point for users who have not chosen a view in their browser.", (
         "face", "zoom", "lines", "routingStrategy", "images", "portFill", "interfaceHighlight",
-        "connections", "directory", "trim", "virtualCombine",
+        "connections", "directory", "trim", "compactEmptyUnits", "virtualCombine", "externalLocations",
+        *TRACE_DESTINATION_FEATURES,
     )),
     ("Drawing", "Clearances are targets at 100% zoom. Routing adapts to the available space and the selected strategy.", (
         "deviceClearance", "cableGap", "horizontalGap", "tubeGap", "tubeParallelGap",
@@ -112,14 +115,20 @@ class CableEditorSettingsForm(forms.Form):
     connections = _toggle("Show Connections", True)
     directory = _toggle("Show Interface Directory", True)
     trim = _toggle("Trim to visible ports")
+    compactEmptyUnits = _toggle("Compact empty rack units")
     virtualCombine = _toggle("Virtual combine")
+    externalLocations = _toggle("Show external cable locations")
+    traceOtherRacks = _toggle(TRACE_DESTINATION_FEATURES["traceOtherRacks"])
+    traceOtherLocations = _toggle(TRACE_DESTINATION_FEATURES["traceOtherLocations"])
+    traceOtherSites = _toggle(TRACE_DESTINATION_FEATURES["traceOtherSites"])
+    traceUnrackedDevices = _toggle(TRACE_DESTINATION_FEATURES["traceUnrackedDevices"])
     deviceClearance = _pixels("Cable clearance from devices (px)", 25, 5, 65)
     cableGap = _pixels("Parallel cable spacing (px)", 4.5, 2, 20, fractional=True)
     horizontalGap = _pixels("Additional horizontal spacing (px)", 5, 0, 30)
     tubeGap = _pixels("Clearance from tube edge (px)", 15, 0, 50)
     tubeParallelGap = _pixels("Parallel clearance from tube edge (px)", 25, 0, 75)
-    deviceGap = _pixels("Virtual device gap, Balanced (px)", 64, 0, 240)
-    pcbDeviceGap = _pixels("Virtual device gap, PCB-style (px)", 102, 0, 240)
+    deviceGap = _pixels("Virtual device gap, Balanced (px)", 43, 0, 240)
+    pcbDeviceGap = _pixels("Virtual device gap, PCB-style (px)", 68, 0, 240)
     deviceGapStep = _pixels("Virtual device gap step for + and − (px)", 48, 4, 120)
     portBorderWidth = _pixels("Default port contour (px)", 3, 1, 8, fractional=True)
     portBorderFree = _pixels("Free port contour (px)", None, 1, 8, fractional=True)
@@ -134,6 +143,12 @@ class CableEditorSettingsForm(forms.Form):
 
     def __init__(self, *args, custom_fields, **kwargs):
         super().__init__(*args, **kwargs)
+        selected_zooms = (self.initial.get("zoom"), self.data.get(self.add_prefix("zoom")))
+        self.fields["zoom"].choices = (
+            *ZOOM_CHOICES,
+            *((scale, f"{float(scale) / ZOOM_REFERENCE_SCALE:.0%}")
+              for scale in LEGACY_FIXED_ZOOM_SCALES if scale in selected_zooms),
+        )
         self.fields["cableCustomFields"].choices = [
             (field.name, field.label or field.name) for field in custom_fields
         ]
@@ -202,7 +217,10 @@ def nbcableeditor_options():
     display["cableCustomFieldLabels"] = {field.name: field.label or field.name for field in fields}
     if not options["features"]["rackSides"]:
         options["face"] = "front"
-    return {**options, "display": display, "featureLabels": RACK_FEATURE_LABELS}, fields
+    return {
+        **options, "display": display, "featureLabels": RACK_FEATURE_LABELS,
+        "zoomReferenceScale": ZOOM_REFERENCE_SCALE, "legacyFixedZoomScales": LEGACY_FIXED_ZOOM_SCALES,
+    }, fields
 
 
 def cable_custom_values(user, cables, fields):

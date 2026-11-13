@@ -6,7 +6,7 @@ from core.models import ObjectType
 from dcim.constants import NONCONNECTABLE_IFACE_TYPES
 from dcim.models import (
     Cable, Device, DeviceType, FrontPort, FrontPortTemplate, Interface, InterfaceTemplate,
-    Manufacturer, ModuleBayTemplate, ModuleType, Rack, RearPort, RearPortTemplate,
+    Location, Manufacturer, ModuleBayTemplate, ModuleType, Rack, RearPort, RearPortTemplate,
 )
 from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Prefetch, Q, prefetch_related_objects
@@ -22,6 +22,7 @@ from ipam.models import VLAN
 
 from . import NbCableEditorConfig
 from .cable_history import history_for_rack
+from .cable_shares import shared_cable_view
 from .cable_views import cable_details, is_simple_cable, port_key, port_unavailable
 from .configuration import ZOOM_CHOICES, cable_custom_values, can_manage_editor_settings, nbcableeditor_options
 from .layout_catalog import templates_for
@@ -29,10 +30,13 @@ from .layout_placeholders import layout_placeholder_fields
 from .metadata_tags import available_tags, tag_data
 from .models import LayoutRevision, PortPlacement
 from .plan_views import plan_bootstrap
+from .rack_features import TRACE_DESTINATION_FEATURES
+from .rack_filter_data import RackFilterMetadata
 from .rack_layouts import rack_layouts
 from .rack_traces import (
-    NO_VLAN_DATA, PORT_KINDS, device_label, endpoint_data, native_path, port_metadata, readable_chassis_names,
-    readable_nodes, trace_payload,
+    NO_VLAN_DATA, PORT_KINDS, device_label, endpoint_data, external_destination_data,
+    external_destination_refs, external_trace_data, external_trace_refs, filter_paths, filter_trace_index,
+    native_path, port_metadata, readable_chassis_names, readable_nodes, trace_payload, unmapped_passive_ends,
 )
 from .request_data import JsonRequestError, read_json_object
 from .saved_views import saved_view_bootstrap
@@ -440,22 +444,26 @@ def _port_on_cable(ports, port_id, cable_id):
     return port if port is not None and port.cable_id == cable_id else None
 
 
-def _immediate_endpoint(key, cable_id, rack_id, nodes, endpoints):
+def _immediate_endpoint(key, cable_id, rack_id, nodes, endpoints, filters):
     port = _port_on_cable(nodes, key, cable_id)
     if port is None or port.device.rack_id == rack_id:
         return None
-    return endpoints[key]
+    return {**endpoints[key], "filter": filters.port(port), "deviceFilter": filters.devices[port.device_id]}
 
 
 def _rack_object_tags(obj, catalog):
     return [catalog[tag.pk] for tag in obj.tags.all() if tag.pk in catalog]
 
 
-def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fields, *, include_vlans):
+def _rack_connection_data(
+    user, rack, devices, ports, tag_catalog, custom_fields, *, include_vlans, include_trace_filters,
+    include_external_locations, include_external_traces,
+):
     interfaces = {port.pk: port for port in ports.values() if isinstance(port, Interface)} if include_vlans else {}
     cable_ids = {port.cable_id for port in ports.values() if port.cable_id is not None}
     if not cable_ids:
-        return [], _vlan_data_for_ports(user, interfaces.values())
+        return ([], _vlan_data_for_ports(user, interfaces.values()),
+                RackFilterMetadata(user, rack, devices, ports.values(), include_trace_places=include_trace_filters), {}, {})
     change_ids = set(
         Cable.objects.restrict(user, "change").filter(pk__in=cable_ids).values_list("pk", flat=True)
     )
@@ -474,6 +482,8 @@ def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fie
     records = []
     refs = set()
     known_cables = {}
+    cable_ends = {}
+    outside_ends = {}
     for cable in Cable.objects.restrict(user).filter(pk__in=cable_ids).annotate(
         has_dependent_records=dependent_records
     ).prefetch_related("terminations__termination_type", "tags").order_by("pk"):
@@ -498,6 +508,18 @@ def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fie
         end_a, end_b = local_port(term_a), local_port(term_b)
         peer_a = peer_ref(term_a, end_b) if not end_a else None
         peer_b = peer_ref(term_b, end_a) if not end_b else None
+        if (include_external_locations or include_external_traces) and bool(end_a) != bool(end_b):
+            local, remote = (term_a, term_b) if end_a else (term_b, term_a)
+            if remote and remote.termination_type_id in port_models:
+                peer = (remote.termination_type_id, remote.termination_id)
+                outside_ends[cable.pk] = ((local.termination_type_id, local.termination_id), peer)
+                refs.add(peer)
+        if include_trace_filters:
+            ref_a = (types[type(end_a)].pk, end_a.pk) if end_a else peer_a
+            ref_b = (types[type(end_b)].pk, end_b.pk) if end_b else peer_b
+            if ref_a and ref_b and ref_a != ref_b:
+                cable_ends[cable.pk] = {ref_a, ref_b}
+                refs.update((ref_a, ref_b))
         trace_a = native_path(end_b, cable.pk, types)
         trace_b = native_path(end_a, cable.pk, types)
         for trace in (trace_a, trace_b):
@@ -505,11 +527,57 @@ def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fie
                 refs.update(key for group in trace[0] for key in group)
         records.append((cable, end_a, end_b, peer_a, peer_b, simple, trace_a, trace_b))
 
-    nodes, links = readable_nodes(user, types, refs, ports, known_cables)
+    external_ends = {cable_id: set(ends) for cable_id, ends in outside_ends.items()}
+    trace_ends = {**external_ends, **cable_ends}
+    paths = filter_paths({
+        cable_id: ends for cable_id, ends in trace_ends.items()
+        if any(kind in pass_through_types for kind, _ in ends)
+    }, types)
+    nodes, links = readable_nodes(
+        user, types, refs.union(ref for chain, _, _ in paths for ref in chain), ports, known_cables,
+    )
+    unmapped = unmapped_passive_ends(paths, trace_ends if include_external_traces else cable_ends, types, nodes)
+    cable_traces, port_traces, trace_nodes = filter_trace_index(paths, cable_ends, types, ports, nodes, links, unmapped=unmapped)
+    external_refs = external_destination_refs(
+        paths, {cable_id: ends[1] for cable_id, ends in outside_ends.items()}, rack.pk, cable_type.pk, nodes, links,
+    ) if include_external_locations else {}
+    routed_traces = external_trace_refs(
+        paths, outside_ends, rack.pk, types, ports, nodes, links, unmapped=unmapped,
+    ) if include_external_traces else {}
+    destination_refs = {ref for destinations in external_refs.values() for ref in destinations}
+    destination_refs.update(route.destination for routes in routed_traces.values() for route in routes)
     if include_vlans:
-        interfaces.update({port.pk: port for port in nodes.values() if isinstance(port, Interface)})
+        interfaces.update({port.pk: port for key, port in nodes.items() if key in refs and isinstance(port, Interface)})
     vlans = _vlan_data_for_ports(user, interfaces.values())
-    endpoints = endpoint_data(user, nodes, vlans, devices, ports)
+    endpoint_keys = refs.union(trace_nodes.values(), destination_refs)
+    endpoints = endpoint_data(user, {key: port for key, port in nodes.items() if key in endpoint_keys}, vlans, devices, ports)
+    destination_rows = external_destination_data(user, destination_refs, nodes, endpoints)
+    external_destinations = {cable_id: [destination_rows[ref] for ref in refs] for cable_id, refs in external_refs.items()}
+    external_traces = external_trace_data(rack, routed_traces, nodes, destination_rows)
+    peer_keys = {
+        key for _, _, _, peer_a, peer_b, *_ in records
+        for key in (peer_a, peer_b) if key in nodes
+    }
+    peer_ports = [nodes[key] for key in peer_keys.union(trace_nodes.values())]
+    filter_devices = {**devices, **{port.device_id: port.device for port in peer_ports if port.device_id not in devices}}
+    filters = RackFilterMetadata(
+        user, rack, filter_devices, (*ports.values(), *peer_ports), include_trace_places=include_trace_filters,
+    )
+    trace_endpoints = {}
+    for port_id, key in trace_nodes.items():
+        port, endpoint = nodes[key], endpoints[key]
+        trace_endpoints[port_id] = {
+            "name": endpoint["portName"],
+            "kind": endpoint["kind"],
+            "filter": filters.port(port),
+            "device": {
+                "id": port.device_id,
+                "name": endpoint["deviceName"],
+                "deviceTypeId": endpoint.get("deviceTypeId"),
+                "deviceType": endpoint.get("deviceType"),
+                "filter": {**filters.devices[port.device_id], **filters.trace_places[port.device_id]},
+            },
+        }
     custom_values = cable_custom_values(user, known_cables.values(), custom_fields)
     cables = []
     for cable, end_a, end_b, peer_a, peer_b, simple, trace_a, trace_b in records:
@@ -519,10 +587,13 @@ def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fie
             "simple": simple,
             "a": port_key(type(end_a), end_a.pk) if end_a else None,
             "b": port_key(type(end_b), end_b.pk) if end_b else None,
-            "endpointA": _immediate_endpoint(peer_a, cable.pk, rack_id, nodes, endpoints),
-            "endpointB": _immediate_endpoint(peer_b, cable.pk, rack_id, nodes, endpoints),
+            "endpointA": _immediate_endpoint(peer_a, cable.pk, rack.pk, nodes, endpoints, filters),
+            "endpointB": _immediate_endpoint(peer_b, cable.pk, rack.pk, nodes, endpoints, filters),
             "traceA": trace_payload(trace_a, cable.pk, cable_type.pk, endpoints, links),
             "traceB": trace_payload(trace_b, cable.pk, cable_type.pk, endpoints, links),
+            **({"filterTrace": cable_traces[cable.pk]} if cable.pk in cable_traces else {}),
+            **({"externalDestinations": external_destinations[cable.pk]} if cable.pk in external_destinations else {}),
+            **({"externalTraces": external_traces[cable.pk]} if cable.pk in external_traces else {}),
             **cable_details(cable),
             **({"custom_fields": custom_values[cable.pk]} if custom_fields else {}),
             "tags": _rack_object_tags(cable, tag_catalog),
@@ -535,7 +606,7 @@ def _rack_connection_data(user, rack_id, devices, ports, tag_catalog, custom_fie
             ),
             "deletable": simple_in_rack and cable.pk in delete_ids and not cable.has_dependent_records,
         })
-    return cables, vlans
+    return cables, vlans, filters, port_traces, trace_endpoints
 
 
 def _occupancy(port):
@@ -557,6 +628,9 @@ def rack_editor(request, pk):
     features = rack_data["settings"]["features"]
     rack_data["planning"] = plan_bootstrap(request, context["rack"], features)
     rack_data["savedViews"] = saved_view_bootstrap(request, context["rack"]) if features["savedViews"] else None
+    rack_data["cableShareUrl"] = _route("cable-links", pk) if request.user.is_authenticated else None
+    rack_data["sharedCableView"] = shared_cable_view(request, context["rack"], rack_data["cables"])
+    rack_data["cableShareUnavailable"] = "cableView" in request.GET and not rack_data["sharedCableView"]
     return render(request, "nbcableeditor/rack.html", context)
 
 
@@ -590,7 +664,7 @@ def _nbcableeditor_context(request, pk):
             name = f"{maker} {device.device_type.model}" if maker else device.device_type.model
         return f"{name} ({device.asset_tag or device.pk})"
 
-    by_template, by_module_template, artwork = rack_layouts(
+    by_template, by_module_template, artwork, missing_layouts = rack_layouts(
         user, devices, visible_types, LAYOUT_PORTS, layout_designs, _module_images,
     )
 
@@ -604,8 +678,11 @@ def _nbcableeditor_context(request, pk):
             queryset = queryset.select_related("virtual_circuit_termination", "_path")
         ports.update({port_key(model, port.pk): port for port in queryset})
         editable_ports[model] = set(model.objects.restrict(user, "change").filter(device_id__in=device_map).values_list("pk", flat=True))
-    cables, vlans = _rack_connection_data(
-        user, rack.pk, device_map, ports, tag_catalogs[Cable], custom_fields, include_vlans=features["vlan"],
+    cables, vlans, filters, port_traces, trace_endpoints = _rack_connection_data(
+        user, rack, device_map, ports, tag_catalogs[Cable], custom_fields,
+        include_vlans=features["vlan"], include_trace_filters=features["connectionFilter"],
+        include_external_locations=features["externalLocations"],
+        include_external_traces=any(features[key] for key in TRACE_DESTINATION_FEATURES),
     )
     visible_cable_ids = {cable["id"] for cable in cables}
     can_add = user.has_perm("dcim.add_cable")
@@ -633,6 +710,8 @@ def _nbcableeditor_context(request, pk):
             manual_connect_url = f"{native_cable_add}?{params}"
         by_device[device.pk].append({
             "id": key,
+            "filter": filters.port(port),
+            **({"filterTrace": port_traces[key]} if key in port_traces else {}),
             **port_metadata(port),
             "name": port.name,
             "url": port.get_absolute_url(),
@@ -662,7 +741,21 @@ def _nbcableeditor_context(request, pk):
         "rack_zoom_choices": ZOOM_CHOICES,
         "rack_data": {
             "settings": editor_settings,
+            "rackId": rack.pk,
+            "rackLocation": Location.objects.restrict(user).filter(pk=rack.location_id).values_list(
+                "name", flat=True,
+            ).first() if features["export"] and rack.location_id else None,
+            "rackUrl": rack.get_absolute_url(),
+            "editorUrl": _route("rack", pk),
             "height": rack.u_height,
+            "siteId": filters.site_id,
+            **filters.trace_context,
+            "filterTraceEndpoints": trace_endpoints,
+            "filterDestinationUrls": {
+                "racks": reverse("dcim-api:rack-list") if user.has_perm("dcim.view_rack") else None,
+                "locations": reverse("dcim-api:location-list") if user.has_perm("dcim.view_location") else None,
+                "sites": reverse("dcim-api:site-list") if user.has_perm("dcim.view_site") else None,
+            } if features["connectionFilter"] else {},
             "startingUnit": rack.starting_unit,
             "descUnits": rack.desc_units,
             "devices": [
@@ -671,10 +764,12 @@ def _nbcableeditor_context(request, pk):
                     "name": display_name(device),
                     "deviceType": device.device_type.model if device.device_type_id in visible_types else None,
                     "deviceTypeId": device.device_type_id if device.device_type_id in visible_types else None,
+                    "filter": filters.devices[device.pk],
                     "position": float(device.position) if device.position is not None else None,
                     "height": float(device.device_type.u_height),
                     "face": device.face or None,
                     "fullDepth": device.device_type.is_full_depth,
+                    "missingLayout": device.device_type_id in missing_layouts,
                     **(_images(device.device_type, user) if device.device_type_id in visible_types else NO_IMAGES),
                     "design": artwork.get(device.pk, {}),
                     "layoutUrl": _route("layout", device.device_type_id) if device.device_type_id in visible_types else None,

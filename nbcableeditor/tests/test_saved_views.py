@@ -33,22 +33,40 @@ class RackSavedViewsTests(TestCase):
 
     def test_view_settings_are_shared_with_other_users_and_read_only_for_rack_viewers(self):
         settings = {
-            "display": {"lines": "filtered", "routingStrategy": "pcb", "vlanColors": {
+            "display": {"lines": "filtered", "routingStrategy": "pcb", "externalLocations": True,
+                        "traceOtherRacks": True, "traceOtherLocations": False, "traceOtherSites": True,
+                        "traceUnrackedDevices": False, "vlanColors": {
                 "rules": [{"ids": "42,45-50", "color": "#00ff00"}], "fallback": "",
             }},
-            "rack": {"devices": "1,2", "hiddenRows": "1:front:1", "deviceGaps": {"12:12": 75}, "vlanKind": "any"},
+            "rack": {"devices": "1,2", "hiddenRows": "1:front:1", "deviceGaps": {"12:12": 75},
+                     "vlanKind": "any", "positionIndicator": False},
             "listFields": {"connection:length": True},
             "selectedConnections": [4, 9],
-            "toolbar": {"devices": False, "planning": False, "export": True},
+            "toolbar": {"devices": False, "planning": False, "export": True, "positionIndicator": False,
+                        "externalLocations": False},
             "connectionFilter": {"kind": "group", "operator": "and", "children": [
                 {"kind": "between", "directional": False,
                  "a": {"devices": [], "deviceTypes": [3], "portRanges": "1-12"},
                  "b": {"devices": [1, 2], "deviceTypes": [], "portRanges": ""}},
-                {"kind": "group", "operator": "or", "children": [
+                {"kind": "group", "operator": "or", "negated": True, "children": [
                     {"kind": "vlan", "endpoint": "any", "membership": "untagged", "ids": "42"},
                     {"kind": "length", "min": 1.5, "max": 4},
+                    {"kind": "location", "scope": "selected-sites", "values": [8, 9]},
+                    {"kind": "trace", "scope": "next", "criteria": {"deviceTypes": [5], "deviceRoles": [7]}},
+                    {"kind": "trace", "scope": "end-in-locations", "values": [7], "negated": True},
+                    {"kind": "group", "operator": "and", "children": []},
                 ]},
             ]},
+            "portFilter": {"kind": "group", "operator": "or", "children": [
+                {"kind": "endpoint", "endpoint": "any", "criteria": {
+                    "devices": [1, 2], "interfaces": [6], "deviceRoles": [4], "deviceTypeTags": [3],
+                    "moduleTypes": [8], "moduleTags": [9], "portRanges": "1-12",
+                }},
+                {"kind": "vlan-mode", "endpoint": "any", "values": ["tagged", "tagged-all"]},
+                {"kind": "trace", "scope": "any", "criteria": {"deviceTypeTags": [3]}},
+                {"kind": "trace", "scope": "along-racks-in-locations", "values": [3, 8]},
+            ]},
+            "portFilterAction": "mark",
         }
         view = self.create("Cabling technician", settings=settings, is_default=True)
         viewer = get_user_model().objects.create_user(username="rack-viewer")
@@ -90,12 +108,35 @@ class RackSavedViewsTests(TestCase):
             nested_filter = {"kind": "group", "operator": "and", "children": [nested_filter]}
         for settings in (
             {"display": {"lines": "invalid"}},
+            {"display": {"externalLocations": "on"}},
+            {"display": {"traceOtherRacks": "on"}},
             {"rack": {"deviceGaps": {"12:12": 241}}},
+            {"rack": {"positionIndicator": "off"}},
             {"selectedConnections": [True]},
             {"toolbar": {"devices": "off"}},
             {"toolbar": {"unknown": False}},
             {"toolbar": {"savedViews": False}},
             {"connectionFilter": nested_filter},
+            {"portFilterAction": "allow"},
+            {"portFilter": {"kind": "group", "operator": "and", "children": [
+                {"kind": "location", "scope": "other-site", "values": []},
+            ]}},
+            {"connectionFilter": {"kind": "group", "operator": "and", "children": [
+                {"kind": "trace", "scope": "previous", "criteria": {"deviceTypes": [3]}},
+            ]}},
+            {"portFilter": {"kind": "group", "operator": "or", "children": [
+                {"kind": "trace", "scope": "any", "criteria": {"deviceTypes": [], "portRanges": ""}},
+            ]}},
+            {"connectionFilter": {"kind": "group", "operator": "and", "negated": "true", "children": []}},
+            {"portFilter": {"kind": "group", "operator": "and", "children": [
+                {"kind": "trace", "scope": "end-in-locations", "values": []},
+            ]}},
+            {"connectionFilter": {"kind": "group", "operator": "and", "children": [
+                {"kind": "trace", "scope": "along-sites", "values": [8], "negated": 1},
+            ]}},
+            {"connectionFilter": {"kind": "group", "operator": "and", "children": [
+                {"kind": "location", "scope": "selected-racks", "values": []},
+            ]}},
         ):
             self.post("create", 400, name="Invalid", settings=settings, isDefault=True)
         self.assertEqual(self.client.get(self.route()).json(), {"views": [view]})

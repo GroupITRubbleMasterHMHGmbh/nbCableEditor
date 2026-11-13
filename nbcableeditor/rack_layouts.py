@@ -2,9 +2,9 @@
 
 from collections import defaultdict
 
-from dcim.models import Module, ModuleBay, ModuleBayTemplate, ModuleType
+from dcim.models import DeviceType, Module, ModuleBay, ModuleBayTemplate, ModuleType
 from dcim.utils import get_module_bay_positions, resolve_module_placeholder
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 
 from .layout_placeholders import RackPlaceholderValues
 from .models import PortPlacement
@@ -66,6 +66,17 @@ def rack_layouts(user, devices, visible_types, port_types, load_designs, load_mo
             elif template.module_type_id in visible_module_types:
                 module_templates[template.module_type_id, placement.face].append((kind, template.name, placement))
 
+    missing_layouts = visible_types.difference(device_designs, (type_id for _, type_id, _ in device_ports))
+    if missing_layouts:
+        # Check existence only. Restricted placements are still excluded from the rack projection.
+        has_placement = Q()
+        for _, field, _ in port_types.values():
+            type_field = field.removesuffix("_id") + "__device_type_id"
+            has_placement |= Q(Exists(PortPlacement.objects.filter(**{type_field: OuterRef("pk")})))
+        missing_layouts.difference_update(
+            DeviceType.objects.filter(has_placement, pk__in=missing_layouts).values_list("pk", flat=True)
+        )
+
     positions = {}
     module_ports = {}
     artwork = {}
@@ -123,7 +134,7 @@ def rack_layouts(user, devices, visible_types, port_types, load_designs, load_mo
             artwork[device.pk] = {
                 face: project(layout, face, face, (0, 0, 1, 1)) for face in sides
             }
-    return device_ports, module_ports, artwork
+    return device_ports, module_ports, artwork, missing_layouts
 
 
 def _port_point(placement):

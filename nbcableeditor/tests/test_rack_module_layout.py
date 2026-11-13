@@ -4,6 +4,7 @@ from dcim.models import (
     ModuleBayTemplate, ModuleType, Rack, Site,
 )
 from django.urls import reverse
+from extras.models import Tag
 from utilities.testing import TestCase
 
 from nbcableeditor.calculator import RackCalculator, UNIT_MM, normalize_profile
@@ -14,7 +15,7 @@ class RackModuleLayoutTestCase(TestCase):
     user_permissions = (
         "dcim.view_rack", "dcim.view_device", "dcim.view_devicetype", "dcim.view_interface",
         "dcim.view_module", "dcim.view_moduletype", "dcim.view_modulebay", "dcim.view_modulebaytemplate",
-        "dcim.view_interfacetemplate",
+        "dcim.view_interfacetemplate", "dcim.view_manufacturer", "extras.view_tag",
     )
 
     def test_nested_module_projects_the_installed_ports_and_device_labels(self):
@@ -34,7 +35,13 @@ class RackModuleLayoutTestCase(TestCase):
             device_type=chassis_type, role=role, site=site, rack=rack, name="Test chassis", position=1, face="front",
         )
         card = Module.objects.create(device=device, module_type=card_type, module_bay=ModuleBay.objects.get(device=device))
-        Module.objects.create(device=device, module_type=subcard_type, module_bay=ModuleBay.objects.get(module=card))
+        subcard = Module.objects.create(
+            device=device, module_type=subcard_type, module_bay=ModuleBay.objects.get(module=card),
+        )
+        module_tag = Tag.objects.create(name="Module tag", slug="module-tag")
+        type_tag = Tag.objects.create(name="Module type tag", slug="module-type-tag")
+        subcard.tags.add(module_tag)
+        subcard_type.tags.add(type_tag)
 
         LayoutRevision.objects.create(device_type=chassis_type, design={
             "front": {"useImage": False, "items": [
@@ -59,9 +66,18 @@ class RackModuleLayoutTestCase(TestCase):
         url = reverse("plugins:nbcableeditor:rack", args=[rack.pk])
         rack_data = self.client.get(url).context["rack_data"]
         payload = rack_data["devices"][0]
+        self.assertFalse(payload["missingLayout"])
         port, = payload["ports"]
         self.assertEqual((port["name"], port["face"], port["x"], port["y"], port["layoutLabel"]),
                          ("Ethernet3/2/1", "front", .5625, .5, "Uplink"))
+        self.assertEqual(port["filter"], {
+            "interfaceId": port["id"],
+            "modules": [{"id": subcard.pk, "name": "Slot 3/2 · Subcard"}],
+            "moduleTypes": [{"id": subcard_type.pk, "name": subcard_type.model}],
+            "moduleTags": [{"id": module_tag.pk, "name": module_tag.name}],
+            "moduleTypeTags": [{"id": type_tag.pk, "name": type_tag.name}],
+            "moduleManufacturers": [{"id": manufacturer.pk, "name": manufacturer.name}],
+        })
         _, point, warning = RackCalculator(rack, rack_data, normalize_profile({}), {}).endpoint(port["id"], None)
         self.assertIsNone(warning)
         self.assertAlmostEqual(point.x[0], .5625 * 19 * 25.4)
@@ -87,3 +103,4 @@ class RackModuleLayoutTestCase(TestCase):
         payload = self.client.get(url).context["rack_data"]["devices"][0]
         self.assertIsNone(payload["ports"][0]["x"])
         self.assertNotIn("module", payload["design"]["front"]["items"][0])
+        self.assertEqual(payload["ports"][0]["filter"], {"interfaceId": port["id"]})

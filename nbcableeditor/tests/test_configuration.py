@@ -13,7 +13,7 @@ from nbcableeditor.configuration import (
     SETTINGS_PERMISSION, SETTINGS_ROUTE, CableEditorSettingsForm, cable_custom_values, nbcableeditor_options,
 )
 from nbcableeditor.models import CableEditorSettings
-from nbcableeditor.rack_features import RACK_FEATURE_LABELS, VIEW_TOOLBAR_FEATURES
+from nbcableeditor.rack_features import RACK_FEATURE_LABELS, TRACE_DESTINATION_FEATURES, VIEW_TOOLBAR_FEATURES
 
 
 class CableEditorSettingsTest(TestCase):
@@ -86,20 +86,34 @@ class CableEditorSettingsTest(TestCase):
     def test_save_validated_settings_and_deliver_them_to_rack_viewers(self):
         self.add_permissions(SETTINGS_PERMISSION)
         url = reverse(SETTINGS_ROUTE)
-        self.assertContains(self.client.get(url), "Default port contour")
+        settings_page = self.client.get(url)
+        self.assertContains(settings_page, "Default port contour")
+        self.assertContains(settings_page, "Show external cable locations")
+        for label in TRACE_DESTINATION_FEATURES.values():
+            self.assertContains(settings_page, label)
         values = self.default_form_data()
-        values.update(face="rear", zoom="1.5", cableGap=6.5, portBorderConnected=4, directoryFields=[], connections=False)
+        values.update(face="rear", zoom="1.5", cableGap=6.5, portBorderConnected=4, directoryFields=[], connections=False,
+                      externalLocations=True, traceOtherLocations=True, traceUnrackedDevices=True)
         self.assertRedirects(self.client.post(url, values), url)
         saved = CableEditorSettings.objects.get()
         self.assertEqual(saved.options["cableGap"], 6.5)
         self.assertEqual(saved.options["portBorderConnected"], 4)
         self.assertFalse(saved.options["connections"])
+        self.assertTrue(saved.options["externalLocations"])
         self.remove_permissions(SETTINGS_PERMISSION)
         rack_url = reverse("plugins:nbcableeditor:rack", args=[self.rack.pk])
         response = self.client.get(rack_url)
         settings = response.context["rack_data"]["settings"]
         self.assertEqual((settings["face"], settings["zoom"]), ("rear", "1.5"))
         self.assertEqual(settings["display"]["directoryFields"], [])
+        self.assertTrue(settings["externalLocations"])
+        self.assertEqual(
+            {key: settings[key] for key in TRACE_DESTINATION_FEATURES},
+            {"traceOtherRacks": False, "traceOtherLocations": True, "traceOtherSites": False, "traceUnrackedDevices": True},
+        )
+        self.assertContains(response, "data-view-external-locations")
+        for suffix in ("other-racks", "other-locations", "other-sites", "unracked-devices"):
+            self.assertContains(response, f"data-view-trace-{suffix}")
         self.assertFalse(response.context["can_manage_editor_settings"])
 
     def test_invalid_clearances_do_not_replace_saved_settings(self):
@@ -119,10 +133,19 @@ class CableEditorSettingsTest(TestCase):
         self.assertEqual(nbcableeditor_options()[0]["zoom"], "horizontal-fit")
         self.assertEqual(CableEditorSettings.objects.get().options["zoom"], "fit")
 
+    def test_zoom_relabels_the_reference_and_retains_an_existing_fixed_scale(self):
+        form = CableEditorSettingsForm(initial={"zoom": "1.5"}, custom_fields=[])
+        choices = dict(form.fields["zoom"].choices)
+        self.assertEqual(choices["1.75"], "100%")
+        self.assertEqual(choices["1.5"], "86%")
+        self.assertEqual(form["zoom"].value(), "1.5")
+
     def test_rack_feature_configuration_defaults_and_preserves_older_form_posts(self):
         defaults, _ = nbcableeditor_options()
         self.assertTrue(all(defaults["features"].values()))
         self.assertTrue(all(defaults["toolbarDefaults"].values()))
+        self.assertFalse(defaults["externalLocations"])
+        self.assertFalse(any(defaults[key] for key in TRACE_DESTINATION_FEATURES))
         self.add_permissions(SETTINGS_PERMISSION)
         url = reverse(SETTINGS_ROUTE)
         form_page = self.client.get(url)
@@ -142,6 +165,7 @@ class CableEditorSettingsTest(TestCase):
         self.assertEqual(data["settings"]["face"], "front")
         self.assertEqual(data["settings"]["featureLabels"], RACK_FEATURE_LABELS)
         self.assertEqual(data["settings"]["toolbarDefaults"], stored["toolbarDefaults"])
+        self.assertFalse(data["settings"]["features"]["externalLocations"])
         self.assertIsNone(data["savedViews"])
         self.assertIsNone(data["planning"]["url"])
         self.assertIsNotNone(data["planning"]["reportUrl"])

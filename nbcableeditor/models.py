@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
@@ -161,3 +163,49 @@ class RackSavedView(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class RackCableShare(models.Model):
+    rack = models.ForeignKey("dcim.Rack", on_delete=models.CASCADE, related_name="+")
+    cable = models.ForeignKey("dcim.Cable", on_delete=models.CASCADE, related_name="+")
+    token = models.UUIDField(default=uuid4, unique=True, editable=False)
+    fingerprint = models.CharField(max_length=64)
+    settings = models.JSONField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("rack", "cable", "fingerprint"), name="nbcableeditor_cable_share_settings"),
+        ]
+
+
+class GlobalRackSavedView(models.Model):
+    name = models.CharField(max_length=120)
+    settings = models.JSONField(default=dict)
+    revision = models.PositiveBigIntegerField(default=0)
+    show_in_toolbar = models.BooleanField(default=False)
+    is_default = models.BooleanField(default=False)
+    all_racks = models.BooleanField(default=False)
+    sites = models.ManyToManyField("dcim.Site", related_name="+", blank=True)
+    racks = models.ManyToManyField("dcim.Rack", related_name="+", blank=True)
+    roles = models.ManyToManyField("dcim.RackRole", related_name="+", blank=True)
+    tags = models.ManyToManyField("extras.Tag", related_name="+", blank=True)
+
+    class Meta:
+        ordering = (Lower("name"), "pk")
+        constraints = [
+            models.UniqueConstraint(Lower("name"), name="nbcableeditor_global_view_name"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class FavoriteRack(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    rack = models.ForeignKey("dcim.Rack", on_delete=models.CASCADE, related_name="+")
+    view_key = models.CharField(max_length=32, default="default")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("user", "rack"), name="nbcableeditor_favorite_user_rack"),
+        ]

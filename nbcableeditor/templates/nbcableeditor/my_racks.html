@@ -1,0 +1,193 @@
+{% extends "base/layout.html" %}
+{% load static %}
+
+{% block title %}My Rack list{% endblock %}
+
+{% block head %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'nbcableeditor/my-racks.css' %}?v={{ editor_version }}">
+{% endblock %}
+
+{% block content %}
+  <div class="container-xl re-my-racks py-3">
+    <h1 class="mb-3">My Rack list</h1>
+
+    {% if selected %}
+      <section class="card mb-3" id="favorite-form" aria-labelledby="re-favorite-title">
+        <div class="card-header">
+          <h2 class="card-title" id="re-favorite-title">Choose a view for {{ selected.name }}</h2>
+        </div>
+        <div class="card-body">
+          <form class="re-favorite-form" method="post" action="{{ return_url }}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="save">
+            <input type="hidden" name="rack" value="{{ selected.pk }}">
+            <div class="re-rack-list-field">
+              <label for="re-favorite-view">Open with</label>
+              <select id="re-favorite-view" name="view" class="form-select no-ts">
+                {% for key, label in view_choices %}
+                  <option value="{{ key }}"{% if selected_key == key %} selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Save favorite</button>
+            <a class="btn btn-outline-secondary" href="{{ return_url }}">Cancel</a>
+          </form>
+        </div>
+      </section>
+    {% endif %}
+
+    <section class="card mb-3" aria-labelledby="re-favorites-title">
+      <div class="card-header">
+        <h2 class="card-title" id="re-favorites-title">Favorites</h2>
+      </div>
+      <div class="card-body">
+        <form class="re-favorite-form" method="get" action="{% url 'plugins:nbcableeditor:my-racks' %}#favorite-form">
+          <div class="re-rack-list-field">
+            {{ rack_lookup.configure.label_tag }}
+            {{ rack_lookup.configure }}
+          </div>
+          <button type="submit" class="btn btn-outline-primary">Choose view</button>
+        </form>
+      </div>
+      {% if favorite_rows %}
+        <div class="table-responsive">
+          <table class="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th scope="col">Rack</th>
+                <th scope="col">Site</th>
+                <th scope="col">Location</th>
+                <th scope="col">View</th>
+                <th scope="col" class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for favorite in favorite_rows %}
+                <tr>
+                  <th scope="row"><a href="{{ favorite.url }}">{{ favorite.rack.name }}</a></th>
+                  <td>{{ favorite.site|default:"—" }}</td>
+                  <td>{{ favorite.location|default:"—" }}</td>
+                  <td>
+                    {{ favorite.view_name }}
+                    {% if favorite.view_unavailable %}
+                      <span class="text-secondary d-block small">Saved view unavailable</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <form method="post" action="{{ return_url }}" class="re-rack-list-actions">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="remove">
+                      <input type="hidden" name="rack" value="{{ favorite.rack.pk }}">
+                      <a class="btn btn-sm btn-outline-secondary" href="{% querystring configure=favorite.rack.pk %}#favorite-form"
+                         aria-label="Change view for {{ favorite.rack.name }}">Change view</a>
+                      <button type="submit" class="btn btn-sm btn-outline-danger"
+                              aria-label="Remove {{ favorite.rack.name }} from favorites">Remove</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="text-secondary px-3 mb-3">Your rack favorites will appear here.</p>
+      {% endif %}
+      {% if favorite_page.has_other_pages %}
+        <nav class="card-footer re-rack-list-pagination" aria-label="Favorites pages">
+          <span class="text-secondary">Page {{ favorite_page.number }} of {{ favorite_page.paginator.num_pages }}</span>
+          {% if favorite_page.has_previous %}
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{% querystring favorites_page=favorite_page.previous_page_number configure=None %}">Previous</a>
+          {% endif %}
+          {% if favorite_page.has_next %}
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{% querystring favorites_page=favorite_page.next_page_number configure=None %}">Next</a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    </section>
+
+    <section class="card" id="rack-catalog" aria-labelledby="re-rack-catalog-title">
+      <div class="card-header">
+        <h2 class="card-title" id="re-rack-catalog-title">Rack catalog</h2>
+      </div>
+      <div class="card-body">
+        <form method="get" action="{% url 'plugins:nbcableeditor:my-racks' %}#rack-catalog">
+          <div class="re-rack-list-fields">
+            {% for field in filter_form %}
+              <div class="re-rack-list-field">
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.errors %}<div class="text-danger small">{{ field.errors|striptags }}</div>{% endif %}
+              </div>
+            {% endfor %}
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-3">
+            <button type="submit" class="btn btn-primary">Filter racks</button>
+            <a class="btn btn-outline-secondary" href="{% url 'plugins:nbcableeditor:my-racks' %}#rack-catalog">Clear filters</a>
+          </div>
+        </form>
+        {% if can_add_matching %}
+          <form method="post" action="{{ return_url }}" class="mt-3">
+            {% csrf_token %}
+            <button type="submit" name="action" value="add-matching" class="btn btn-outline-primary">Add matching racks</button>
+          </form>
+        {% endif %}
+      </div>
+      {% if catalog_rows %}
+        <div class="table-responsive">
+          <table class="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th scope="col">Rack</th>
+                <th scope="col">Site</th>
+                <th scope="col">Location</th>
+                <th scope="col">Status</th>
+                <th scope="col">Height</th>
+                <th scope="col" title="Devices visible to your NetBox account">Devices</th>
+                <th scope="col" class="text-end">Favorite</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in catalog_rows %}
+                <tr>
+                  <th scope="row"><a href="{{ item.url }}">{{ item.rack.name }}</a></th>
+                  <td>{{ item.site|default:"—" }}</td>
+                  <td>{{ item.location|default:"—" }}</td>
+                  <td>{{ item.rack.get_status_display }}</td>
+                  <td>{{ item.rack.u_height }} U</td>
+                  <td>{{ item.rack.visible_device_count }}</td>
+                  <td class="text-end">
+                    {% if item.favorite %}
+                      <a class="btn btn-sm btn-outline-secondary" href="{% querystring configure=item.rack.pk %}#favorite-form"
+                         aria-label="Change favorite view for {{ item.rack.name }}">Change view</a>
+                    {% else %}
+                      <a class="btn btn-sm btn-outline-primary" href="{% querystring configure=item.rack.pk %}#favorite-form"
+                         aria-label="Add {{ item.rack.name }} to favorites">Add favorite</a>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <nav class="card-footer re-rack-list-pagination" aria-label="Rack catalog pages">
+          <span class="text-secondary">
+            {{ catalog_page.start_index }}–{{ catalog_page.end_index }} of {{ catalog_page.paginator.count }} racks
+          </span>
+          {% if catalog_page.has_previous %}
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{% querystring page=catalog_page.previous_page_number configure=None %}#rack-catalog">Previous</a>
+          {% endif %}
+          {% if catalog_page.has_next %}
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{% querystring page=catalog_page.next_page_number configure=None %}#rack-catalog">Next</a>
+          {% endif %}
+        </nav>
+      {% else %}
+        <p class="text-secondary px-3 mb-3">No racks match the current filters.</p>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}

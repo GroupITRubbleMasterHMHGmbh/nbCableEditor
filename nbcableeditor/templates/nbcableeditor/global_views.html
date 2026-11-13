@@ -1,0 +1,156 @@
+{% extends 'base/layout.html' %}
+{% load static %}
+
+{% block title %}Cable Editor · Global rack views{% endblock %}
+
+{% block head %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'nbcableeditor/rack.css' %}?v={{ editor_version }}">
+  <link rel="stylesheet" href="{% static 'nbcableeditor/rack-connection-filter.css' %}?v={{ editor_version }}">
+  <link rel="stylesheet" href="{% static 'nbcableeditor/rack-rule-editor.css' %}?v={{ editor_version }}">
+  <link rel="stylesheet" href="{% static 'nbcableeditor/global-views.css' %}?v={{ editor_version }}">
+{% endblock %}
+
+{% block javascript %}
+  {{ block.super }}
+  <script src="{% static 'nbcableeditor/http-url.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-connection-filter.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-rules.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/rack-rule-editor.js' %}?v={{ editor_version }}" defer></script>
+  <script src="{% static 'nbcableeditor/global-views.js' %}?v={{ editor_version }}" defer></script>
+{% endblock %}
+
+{% block content %}
+  <div lang="en" data-global-view-designer>
+    <header class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <h1 class="mb-0">Global rack views</h1>
+      <a class="btn btn-outline-secondary" href="{% url 'plugins:nbcableeditor:settings' %}">Plugin settings</a>
+    </header>
+    <noscript><p class="alert alert-warning">Enable JavaScript to use the global rack view designer.</p></noscript>
+    <div class="re-global-views">
+      <form class="card" data-global-view-form hidden>
+        {% csrf_token %}
+        <div class="card-body d-grid gap-3">
+          <div>
+            <label class="form-label" for="re-global-record">View</label>
+            <select class="form-select no-ts" id="re-global-record" data-record></select>
+          </div>
+          <div>
+            <label class="form-label" for="re-global-name">Name</label>
+            <input class="form-control" id="re-global-name" data-name maxlength="120" autocomplete="off" required>
+          </div>
+          <fieldset>
+            <legend class="form-label">Availability</legend>
+            <label class="form-check">
+              <input class="form-check-input" type="radio" name="re-global-scope" value="all" checked>
+              <span class="form-check-label">All racks</span>
+            </label>
+            <label class="form-check">
+              <input class="form-check-input" type="radio" name="re-global-scope" value="selected">
+              <span class="form-check-label">Selected racks, sites, roles or tags</span>
+            </label>
+            <div class="re-global-scopes mt-2" data-scopes hidden>
+              <p class="text-secondary small mb-0">A rack matches when any selected criterion applies.</p>
+              <div class="re-global-field-grid" data-scope-fields></div>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend class="form-label">Rack view selection</legend>
+            <div class="form-check">
+              <input class="form-check-input" id="re-global-show-in-toolbar" type="checkbox" data-show-in-toolbar
+                     aria-describedby="re-global-show-in-toolbar-help">
+              <label class="form-check-label" for="re-global-show-in-toolbar">Show in toolbar</label>
+              <div class="form-hint" id="re-global-show-in-toolbar-help">Add this view to the quick selection on matching racks.</div>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" id="re-global-is-default" type="checkbox" data-is-default
+                     aria-describedby="re-global-is-default-help">
+              <label class="form-check-label" for="re-global-is-default">Is default</label>
+              <div class="form-hint" id="re-global-is-default-help">For racks without a rack-specific default, the first matching global default by name is used.</div>
+            </div>
+          </fieldset>
+          <details class="re-global-section">
+            <summary>Display options</summary>
+            <div class="re-global-field-grid pt-2" data-display-fields></div>
+          </details>
+          <section class="re-global-section d-grid gap-2" aria-labelledby="re-global-filters-title" data-global-filters hidden>
+            <h2 class="h3 mb-0" id="re-global-filters-title">Rules</h2>
+            <div>
+              <label class="form-label" for="re-global-filter-rack">Preview rack</label>
+              <select class="form-select no-ts" id="re-global-filter-rack" data-filter-rack
+                      aria-describedby="re-global-filter-rack-help"></select>
+              <p class="text-secondary small mt-1 mb-0" id="re-global-filter-rack-help">
+                Use a representative rack to see its devices and ports in the rule editors.
+                The rules apply to all racks in the selected scope.
+              </p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              <button class="btn btn-outline-primary btn-sm" type="button" data-edit-connection-filter
+                      aria-haspopup="dialog" aria-controls="re-global-connection-filter">Connection Rules…</button>
+              <button class="btn btn-outline-primary btn-sm" type="button" data-edit-port-filter
+                      aria-haspopup="dialog" aria-controls="re-global-port-filter">Interface Rules…</button>
+              <button class="btn btn-outline-primary btn-sm" type="button" data-edit-device-rules
+                      aria-haspopup="dialog" aria-controls="re-global-device-rules">Device Rules…</button>
+            </div>
+            <p class="text-secondary small mb-0" role="status" data-filter-summary></p>
+          </section>
+          <details class="re-global-section">
+            <summary>Toolbar controls</summary>
+            <div class="re-global-field-grid pt-2" data-toolbar-fields></div>
+          </details>
+          <section class="re-global-source" data-source hidden>
+            <p class="mb-1 text-secondary" data-source-message></p>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-clear-rack-settings hidden>
+              Clear rack-specific selections
+            </button>
+          </section>
+          <p class="alert alert-danger mb-0" role="alert" data-error hidden></p>
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+            <button class="btn btn-primary" type="submit" data-save>Save global view</button>
+            <button class="btn btn-outline-danger" type="button" data-delete hidden>Delete…</button>
+            <span class="text-success small" role="status" data-status></span>
+          </div>
+          <div class="border rounded p-2" data-delete-panel hidden>
+            <p class="mb-2" data-delete-message></p>
+            <button class="btn btn-danger btn-sm" type="button" data-confirm-delete>Delete global view</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-cancel-delete>Cancel</button>
+          </div>
+        </div>
+      </form>
+      <section class="card" aria-labelledby="re-global-preview" data-preview hidden>
+        <div class="card-header d-flex gap-2 justify-content-between">
+          <h2 class="card-title" id="re-global-preview">Rack preview</h2>
+          <button class="btn btn-outline-secondary btn-sm" type="button" data-refresh-preview>Refresh</button>
+        </div>
+        <div class="card-body d-grid gap-2">
+          <p class="text-secondary small mb-0" role="status" data-preview-summary></p>
+          <ul class="list-group list-group-flush" data-preview-results></ul>
+          <div class="d-flex flex-wrap gap-2" data-pagination hidden>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-previous>Previous</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-next>Next</button>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div class="re-rack">
+      <dialog class="re-rack-dialog re-connection-filter-dialog" id="re-global-connection-filter" data-connection-filter-dialog></dialog>
+      <dialog class="re-rack-dialog re-connection-filter-dialog" id="re-global-port-filter" data-port-filter-dialog></dialog>
+      <dialog class="re-rack-dialog re-connection-filter-dialog" id="re-global-device-rules" data-device-rules-dialog></dialog>
+      <dialog class="re-rack-dialog re-global-filter-preview" aria-labelledby="re-global-filter-preview-title" data-global-filter-preview>
+        <div class="re-rack-dialog-body">
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <h2 class="re-rack-dialog-title" id="re-global-filter-preview-title">Rule preview</h2>
+            <div class="d-flex flex-wrap gap-2">
+              <button class="btn btn-primary btn-sm" type="button" data-filter-preview-back autofocus>Back to rules</button>
+              <button class="btn btn-outline-secondary btn-sm" type="button" data-filter-preview-cancel>Cancel preview</button>
+            </div>
+          </div>
+          <p class="text-secondary small mb-0" role="status" data-filter-preview-status></p>
+          <iframe class="re-global-filter-preview-frame" data-filter-preview-frame title="Rack elevations with draft rules"
+                  sandbox="allow-scripts allow-same-origin"></iframe>
+        </div>
+      </dialog>
+    </div>
+    {{ designer|json_script:"re-global-views-data" }}
+  </div>
+{% endblock %}

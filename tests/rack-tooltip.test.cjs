@@ -61,3 +61,44 @@ test("placement returns null if there is no clear viewport space", () => {
   assert.equal(place({anchor, width: 100, height: 62, bounds, segments}), null);
   assert.equal(place({anchor, width: 121, height: 30, bounds, segments: []}), null);
 });
+
+test("a wide tooltip clears every visible cable leg by at least 100 pixels", () => {
+  const bounds = {left: 8, top: 8, right: 1912, bottom: 1072};
+  const route = [point(150, 395), point(1550, 395), point(1550, 490), point(530, 490), point(530, 615), point(1700, 615)];
+  const segments = visibleSegments(route, bounds);
+  const anchor = point(950, 490);
+  const width = 390;
+  const height = 175;
+  const clearance = 100;
+  const previous = {left: 755, top: 205};
+  const result = place({anchor, width, height, bounds, segments, clearance, previous});
+  assert.ok(result);
+  const {left, top} = result;
+  for (const {a, b} of segments) {
+    assert.ok(Math.max(a.x, b.x) < left - clearance || Math.min(a.x, b.x) > left + width + clearance ||
+      Math.max(a.y, b.y) < top - clearance || Math.min(a.y, b.y) > top + height + clearance);
+  }
+});
+
+test("clearance is measured from the port edge even when the guide starts at its center", () => {
+  const bounds = {left: 8, top: 8, right: 1272, bottom: 720};
+  const portBounds = {left: 1200, top: 31, right: 1230, bottom: 55};
+  const width = 215;
+  const height = 90;
+  const clearance = 100;
+  const result = place({anchor: point(1215, 43), width, height, bounds, segments: [], portBounds, clearance});
+  assert.ok(result);
+  const {left, top} = result;
+  const horizontalGap = Math.max(portBounds.left - left - width, left - portBounds.right, 0);
+  const verticalGap = Math.max(portBounds.top - top - height, top - portBounds.bottom, 0);
+  assert.ok(Math.hypot(horizontalGap, verticalGap) >= clearance);
+});
+
+test("the normal clearance still fits when the wide clearance is unavailable", () => {
+  const bounds = {left: 8, top: 8, right: 792, bottom: 272};
+  const anchor = point(400, 140);
+  const segments = visibleSegments([point(8, 140), point(792, 140)], bounds);
+  const layout = {anchor, width: 330, height: 95, bounds, segments};
+  assert.equal(place({...layout, clearance: 100}), null);
+  assert.ok(place(layout));
+});

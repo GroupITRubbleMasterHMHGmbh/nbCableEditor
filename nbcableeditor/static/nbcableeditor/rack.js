@@ -4,7 +4,9 @@
   const editor = document.getElementById("re-rack-editor");
   if (!editor) return;
 
-  const data = JSON.parse(document.getElementById("re-rack-data").textContent);
+  const inventory = JSON.parse(document.getElementById("re-rack-data").textContent);
+  const data = globalThis.NbCableEditorFallbackLayout.project(inventory);
+  const globalViewPreview = data.globalViewPreview === true;
   const httpUrl = globalThis.NbCableEditorHttpUrl;
   const savedViewsApi = globalThis.NbCableEditorSavedViews;
   let savedViews;
@@ -16,12 +18,24 @@
   const viewDirectory = get("view-directory");
   const viewTrim = get("view-trim");
   const viewVirtualCombine = get("view-virtual-combine");
+  const viewExternalLocations = get("view-external-locations");
+  const traceDestinationOptions = [
+    {key: "traceOtherRacks", control: get("view-trace-other-racks"), kind: "rack", match: "otherRack"},
+    {key: "traceOtherLocations", control: get("view-trace-other-locations"), kind: "location", match: "otherLocation"},
+    {key: "traceOtherSites", control: get("view-trace-other-sites"), kind: "site", match: "otherSite"},
+    {key: "traceUnrackedDevices", control: get("view-trace-unracked-devices"), kind: "device", match: "unracked"},
+  ];
+  const viewCompactEmptyUnits = get("view-compact-empty-units");
+  const viewPositionIndicator = get("view-position-indicator");
+  let positionIndicator;
   const connectionsSection = get("connections-section");
   const directorySection = get("directory-section");
   const viewPreferencesKey = "nbcableeditor:view";
   const rackPreferencesKey = viewPreferencesKey + ":" + location.pathname;
-  const viewPreferences = readViewPreferences(viewPreferencesKey);
   const rackPreferences = readViewPreferences(rackPreferencesKey);
+  let personalUsesSystemDefaults = rackPreferences.useSystemDefaults === true;
+  let preferSystemView = rackPreferences.preferSystemView === true;
+  const viewPreferences = personalUsesSystemDefaults ? rackPreferences.display ?? {} : readViewPreferences(viewPreferencesKey);
   const viewDefaults = data.settings ?? {};
   const toolbar = globalThis.NbCableEditorToolbar.create({
     editor, features: viewDefaults.features, defaults: viewDefaults.toolbarDefaults, labels: viewDefaults.featureLabels,
@@ -29,12 +43,14 @@
   const enabled = key => toolbar.isEnabled(key);
   const displayFeatures = {
     connections: "panels", directory: "panels", trim: "trim", virtualCombine: "virtualCombine",
+    externalLocations: "externalLocations", compactEmptyUnits: "compactEmptyUnits",
+    ...Object.fromEntries(traceDestinationOptions.map(({key}) => [key, key])),
     zoom: "zoom", lines: "lines", images: "deviceImages", interfaceHighlight: "interfaceHighlight",
     routingStrategy: "routingStrategy", portFill: "vlan", vlanColors: "vlan",
   };
   const rackFeatures = {
     face: "rackSides", devices: "devices", hiddenRows: "portRows", cableDevice: "deviceCableFocus",
-    deviceGaps: "gapControls", vlan: "vlan", vlanKind: "vlan",
+    deviceGaps: "gapControls", vlan: "vlan", vlanKind: "vlan", positionIndicator: "positionIndicator",
   };
   const listFeatures = {"directory:vlan": "vlan", "directory:peer-vlan": "vlan", "connection:vlan": "vlan"};
   let originalView;
@@ -47,7 +63,7 @@
     deviceClearance: deviceEdgeClearance = defaultDeviceClearance,
     cableGap: parallelCableGap = defaultCableGap,
     horizontalGap: extraHorizontalGap = defaultHorizontalGap,
-    deviceGap: defaultGap = 64, pcbDeviceGap: pcbDefaultGap = 102, deviceGapStep: gapStep = 48,
+    deviceGap: defaultGap = 43, pcbDeviceGap: pcbDefaultGap = 68, deviceGapStep: gapStep = 48,
     tubeGap, tubeParallelGap, portBorderWidth = defaultPortBorderWidth,
     portBorderFree, portBorderConnected, portBorderUnavailable,
   } = data.settings ?? {};
@@ -71,16 +87,37 @@
     if (width != null) editor.style.setProperty("--re-rack-port-border-scale" + state, width / defaultPortBorderWidth);
   }
   const scroll = get("scroll");
+  const rackPanel = scroll.closest(".re-rack-panel");
+  const pageBody = editor.closest(".page-body");
+  const pageFooter = editor.closest(".page-wrapper")?.querySelector(":scope > footer");
   const unitElevation = get("unit-elevation");
   const gutter = get("gutter");
   const faceChoices = Array.from(editor.querySelectorAll("[data-rack-face-choice]"));
   const facePanels = Array.from(board.querySelectorAll("[data-rack-face-panel]"));
   const wires = get("wires");
+  const externalLocationApi = globalThis.NbCableEditorExternalLocations;
+  board.style.setProperty("--re-rack-location-badge-width", externalLocationApi.badgeWidth + "px");
+  const externalLocationLayer = get("external-location-layer");
+  const externalLocationUi = globalThis.NbCableEditorExternalLocationUi.mount({
+    layer: externalLocationLayer, tooltip: get("external-location-tooltip"), hideWireTooltip, scroll,
+  });
   const lines = get("lines");
   const connectionFilterApi = globalThis.NbCableEditorConnectionFilter;
+  const {endpointPort} = connectionFilterApi;
   const connectionFilterOpen = get("connection-filter-open");
+  const portFilterOpen = get("port-filter-open");
+  const deviceRulesOpen = get("device-rules-open");
+  const rulesApi = globalThis.NbCableEditorRules;
+  const ruleSettings = {interface: undefined, connection: undefined, device: undefined};
+  let ruleEffects = {interface: new Map(), connection: new Map(), device: new Map()};
+  let connectionRuleEvaluator = () => ({});
   let connectionFilter;
   let matchesConnectionFilter;
+  let portFilter;
+  let portFilterAction;
+  let portFilterRule;
+  let filterPreview = null;
+  let linkedCableId = data.sharedCableView?.cableId ?? null;
   const selectedConnectionsOpen = get("selected-connections-open");
   const selectedConnectionsDialog = get("selected-connections-dialog");
   let selectedConnectionIds = new Set();
@@ -95,6 +132,9 @@
   const interfaceHighlight = get("interface-highlight");
   const deviceImages = get("device-images");
   const zoom = get("zoom");
+  const zoomIn = get("zoom-in");
+  const zoomOut = get("zoom-out");
+  const panButton = get("pan-toggle");
   const customZoomOption = zoom.querySelector('[value="custom"]');
   const status = get("status");
   const cancel = get("cancel");
@@ -168,6 +208,7 @@
   const guideLine = tooltipGuide.querySelector("path");
   const guideRing = tooltipGuide.querySelector("circle");
   const tooltipGeometry = globalThis.NbCableEditorTooltip;
+  const wideTooltipViewport = window.matchMedia("(min-width: 1280px) and (hover: hover) and (pointer: fine)");
   const createDialog = get("cable-create");
   const createForm = get("create-form");
   const cableDefaultsKey = "nbcableeditor:cable-defaults";
@@ -190,8 +231,22 @@
   const deleteYes = get("modal-delete-yes");
   const deleteCancel = get("modal-delete-cancel");
   const detailsError = get("modal-error");
+  const shareButton = get("modal-share");
+  const shareDialog = get("cable-link-dialog");
+  const shareInput = get("cable-link-url");
+  let sharingCable = false;
   const inlineEditors = new WeakMap();
-  const cables = new Map(data.cables.map((cable) => [cable.id, cable]));
+  const filterTraceEndpoints = data.filterTraceEndpoints ?? {};
+  const resolveTraceEndpoints = ids => ids?.map(id => filterTraceEndpoints[id]).filter(Boolean) ?? [];
+  const resolveFilterTrace = trace => trace && {
+    next: resolveTraceEndpoints(trace.next),
+    any: resolveTraceEndpoints(trace.any),
+    ends: resolveTraceEndpoints(trace.ends),
+    along: resolveTraceEndpoints(trace.along),
+  };
+  const cables = new Map(data.cables.map(cable => [
+    cable.id, {...cable, filterTrace: resolveFilterTrace(cable.filterTrace)},
+  ]));
   const ports = new Map();
   const portIdsByDataset = new Map();
   const {group, mountedTop} = globalThis.NbCableEditorRows;
@@ -222,6 +277,8 @@
   let customZoomScale = 1;
   let viewportZoom = null;
   let zoomPreferenceTimer = null;
+  let panMode = false;
+  let viewport;
   const SVG = "http://www.w3.org/2000/svg";
   const mask = document.createElementNS(SVG, "mask");
   mask.id = "re-rack-port-protection";
@@ -229,6 +286,8 @@
   const definitions = document.createElementNS(SVG, "defs");
   definitions.append(mask);
   const wireLayer = document.createElementNS(SVG, "g");
+  const virtualPortLayer = document.createElementNS(SVG, "g");
+  virtualPortLayer.dataset.virtualPortCables = "";
   const bundleLayer = document.createElementNS(SVG, "g");
   const sleeveLayer = document.createElementNS(SVG, "g");
   const traceLayer = document.createElementNS(SVG, "g");
@@ -246,13 +305,13 @@
   let rackPlan;
   let drawnPlanGeometry;
   let drawnPlanKey = "";
-  for (const layer of [wireLayer, bundleLayer, sleeveLayer, traceLayer, hoverLayer, handleLayer, previewLayer]) {
+  for (const layer of [wireLayer, virtualPortLayer, bundleLayer, sleeveLayer, traceLayer, hoverLayer, handleLayer, previewLayer]) {
     layer.dataset.inventoryWires = "";
   }
-  for (const layer of [wireLayer, traceLayer, hoverLayer, handleLayer, previewLayer, planLayer, planPointerLayer]) {
+  for (const layer of [wireLayer, virtualPortLayer, traceLayer, hoverLayer, handleLayer, previewLayer, planLayer, planPointerLayer]) {
     layer.setAttribute("mask", "url(#" + mask.id + ")");
   }
-  wires.append(definitions, bundleLayer, wireLayer, sleeveLayer, traceLayer, hoverLayer, handleLayer, previewLayer,
+  wires.append(definitions, bundleLayer, wireLayer, virtualPortLayer, sleeveLayer, traceLayer, hoverLayer, handleLayer, previewLayer,
     planLayer, planPointerLayer);
   let combinedRoutes = new Map();
   let cableSleeves = new Map();
@@ -367,6 +426,7 @@
   }
 
   function portDisplayLabel(port) {
+    if (port.fallbackLayout) return port.name;
     return port.layoutLabel?.trim() || port.label?.trim() || port.name.match(/\d+$/)?.[0] || port.name;
   }
 
@@ -390,7 +450,8 @@
       .map(id => ports.get(id))
       .filter(other => Math.abs(other.x - port.x) < .04)
       .map(other => Math.abs(other.y - port.y))));
-    const limit = distance => "max(7px, calc(" + distance * 100 + "% - var(--re-rack-marker-clearance, 1px)))";
+    const minimum = port.fallbackLayout ? 1 : 7;
+    const limit = distance => "max(" + minimum + "px, calc(" + distance * 100 + "% - var(--re-rack-marker-clearance, 1px)))";
     if (Number.isFinite(horizontal)) marker.style.maxWidth = limit(horizontal);
     if (Number.isFinite(vertical)) marker.style.maxHeight = limit(vertical);
   }
@@ -403,6 +464,7 @@
     const adminState = portAdminState(port);
     const occupancy = occupancyLabels[port.occupancy] ?? "Unavailable";
     if (marker) {
+      element.toggleAttribute("data-fallback-port", Boolean(port.fallbackLayout));
       limitPortMarkerSize(element, port);
       updatePortVlanFill(element, port);
       const labelFrame = node("span", "re-rack-port-label-frame");
@@ -423,6 +485,7 @@
     element.setAttribute("aria-pressed", "false");
     element.setAttribute("aria-haspopup", "menu");
     element.dataset.port = port.id;
+    updatePortFilterMark(element, port.id);
     element.toggleAttribute("data-port-used", port.occupancy !== "free");
     element.toggleAttribute("data-unrelated-port", dimPortForCableFocus(port));
     return element;
@@ -438,7 +501,141 @@
   }
 
   function cableMatchesDevice(cable) {
-    return !cableFocusDevice || [cable.a, cable.b].some(id => ports.get(id)?.device.id === cableFocusDevice.id);
+    return (linkedCableId !== null && cable?.id === linkedCableId) || !cableFocusDevice ||
+      [cable.a, cable.b].some(id => ports.get(id)?.device.id === cableFocusDevice.id);
+  }
+
+  function modernRulesActive(kind) {
+    return filterPreview?.kind === kind || Array.isArray(ruleSettings[kind]);
+  }
+
+  function rebuildRuleEffects() {
+    const effects = {interface: new Map(), connection: new Map(), device: new Map()};
+    for (const kind of Object.keys(effects)) {
+      const entries = filterPreview?.kind === kind ? filterPreview.rules : ruleSettings[kind];
+      const evaluate = rulesApi.compile(kind, entries ?? [], filterFeatures);
+      if (kind === "connection") {
+        connectionRuleEvaluator = evaluate;
+        for (const cable of cables.values()) {
+          effects.connection.set(cable.id, evaluate(cable, cableEndpoint(cable, "A"), cableEndpoint(cable, "B")));
+        }
+      } else if (kind === "interface") {
+        for (const port of ports.values()) effects.interface.set(port.id, evaluate(port));
+      } else {
+        for (const device of data.devices) {
+          effects.device.set(device.id, evaluate({...device, ports: device.ports.map(port => ports.get(port.id))}));
+        }
+      }
+    }
+    ruleEffects = effects;
+  }
+
+  function interfaceActions(id) {
+    return ruleEffects.interface.get(id) ?? {};
+  }
+
+  function connectionActions(cable) {
+    return ruleEffects.connection.get(cable?.id) ?? {};
+  }
+
+  function deviceActions(id) {
+    return ruleEffects.device.get(id) ?? {};
+  }
+
+  function deviceVisibleOnFace(device, face) {
+    return deviceActions(device.id)[face] !== false;
+  }
+
+  function portFilterEffect(id) {
+    if (modernRulesActive("interface")) return "";
+    return lines.value === "filtered" && portFilterRule?.excluded.has(id) ? portFilterRule.action : "";
+  }
+
+  function portHiddenByFilter(id) {
+    const sharedCable = linkedCableId === null ? null : cables.get(linkedCableId);
+    if (sharedCable?.a === id || sharedCable?.b === id) return false;
+    return portHiddenByRules(id) || portFilterEffect(id) === "hide";
+  }
+
+  function portHiddenByRules(id) {
+    const port = ports.get(id);
+    const visible = interfaceActions(id).visible ?? deviceActions(port?.device.id).interfaces;
+    return visible === false;
+  }
+
+  function portLockedByFilter(id) {
+    const action = portFilterEffect(id);
+    return Boolean(filterPreview) || deviceActions(ports.get(id)?.device.id).edit === false ||
+      interfaceActions(id).edit === false ||
+      action === "block" || action === "hide";
+  }
+
+  function portConnectAllowed(id) {
+    return !portLockedByFilter(id) && !portHiddenByFilter(id) && interfaceActions(id).connect !== false;
+  }
+
+  function portDisconnectAllowed(id) {
+    return !portLockedByFilter(id) && !portHiddenByFilter(id) && interfaceActions(id).disconnect !== false;
+  }
+
+  function cableLockedByFilter(cable) {
+    return Boolean(filterPreview) || connectionActions(cable).edit === false ||
+      Boolean(cable && [cable.a, cable.b].some(portLockedByFilter));
+  }
+
+  function cableDisconnectAllowed(cable) {
+    return !cableLockedByFilter(cable) && Boolean(cable) &&
+      [cable.a, cable.b].filter(id => ports.has(id)).every(portDisconnectAllowed);
+  }
+
+  function cableVisibleByRules(cable, actions = connectionActions(cable)) {
+    if (!cable) return false;
+    if (cable.id === linkedCableId) return true;
+    if (actions.visible === false) return false;
+    return [cable.a, cable.b].every(id => !ports.has(id) ||
+      (interfaceActions(id).hideCable !== true && deviceActions(ports.get(id).device.id).cables !== false));
+  }
+
+  function rackHasFilterLocks() {
+    const rule = portFilterRule;
+    return Boolean(filterPreview) ||
+      [...ports.keys()].some(id => !portConnectAllowed(id) || !portDisconnectAllowed(id)) ||
+      [...cables.values()].some(cableLockedByFilter) ||
+      (!modernRulesActive("interface") && lines.value === "filtered" && rule?.excluded.size > 0 && rule.action !== "mark");
+  }
+
+  function updatePortFilterMark(control, id) {
+    const action = portFilterEffect(id);
+    if (action) control.dataset.portFilter = action;
+    else delete control.dataset.portFilter;
+    const effects = interfaceActions(id);
+    const properties = {
+      "--re-rule-port-color": effects.color,
+      "--re-rule-label-color": effects.labelColor,
+      "--re-rule-label-weight": effects.fontWeight,
+      "--re-rule-icon-color": effects.iconColor,
+    };
+    for (const [name, value] of Object.entries(properties)) {
+      if (value) control.style.setProperty(name, value);
+      else control.style.removeProperty(name);
+    }
+    control.toggleAttribute("data-rule-colored", Boolean(effects.color));
+    control.toggleAttribute("data-rule-hide-label", effects.hideLabel === true);
+    const icon = effects.icon && effects.icon !== "none" ? effects.icon : null;
+    if (icon) control.dataset.ruleIcon = icon;
+    else delete control.dataset.ruleIcon;
+    let badge = control.querySelector(":scope > .re-rack-rule-icon");
+    if (icon && !badge) {
+      badge = node("span", "re-rack-rule-icon");
+      badge.setAttribute("aria-hidden", "true");
+      control.append(badge);
+    }
+    if (badge) {
+      if (!icon) badge.remove();
+      else badge.textContent = icon === "red-x" ? "\u00d7" : icon === "green-check" ? "\u2713" : "";
+    }
+    control.toggleAttribute("data-rule-connect-disabled", !portConnectAllowed(id));
+    control.toggleAttribute("data-rule-disconnect-disabled", !portDisconnectAllowed(id));
   }
 
   function dimPortForCableFocus(port) {
@@ -461,12 +658,17 @@
 
   function portFaceVisible(id) {
     const face = rackSideOfPort(id);
-    return !face || rackFaceVisible(face);
+    const device = ports.get(id)?.device;
+    return (!face || rackFaceVisible(face)) && (!device || !face || deviceVisibleOnFace(device, face));
+  }
+
+  function routingMarker(id) {
+    const marker = markers.get(id);
+    return marker && !marker.hidden && portFaceVisible(id) ? marker : undefined;
   }
 
   function visibleMarker(id) {
-    const marker = markers.get(id);
-    return marker && !marker.hidden && portFaceVisible(id) ? marker : undefined;
+    return portHiddenByFilter(id) ? undefined : routingMarker(id);
   }
 
   function cableInFocus(cable) {
@@ -488,15 +690,21 @@
   }
 
   function quickPortVisible(port) {
-    return port && deviceInFocus(port.device.id) && portRowVisible(port.id) && portFaceVisible(port.id);
+    return port && !portHiddenByFilter(port.id) &&
+      deviceInFocus(port.device.id) && portRowVisible(port.id) && portFaceVisible(port.id);
   }
 
   function cableHasPortInView(cable) {
-    return quickPortVisible(ports.get(cable.a)) || quickPortVisible(ports.get(cable.b));
+    return [cable.a, cable.b].some(id => {
+      const port = ports.get(id);
+      return port && portFilterEffect(id) !== "hide" && deviceInFocus(port.device.id) &&
+        portRowVisible(id) && portFaceVisible(id);
+    });
   }
 
   function quickAvailable(port) {
-    return quickPortVisible(port) && !port.blocked && port.cableId === null && !stagedByPort.has(port.id);
+    return quickPortVisible(port) && portConnectAllowed(port.id) &&
+      !port.blocked && port.cableId === null && !stagedByPort.has(port.id);
   }
 
   function targetDevices(sourcePort) {
@@ -553,8 +761,8 @@
     quickClear.disabled = busy || (!count && !quickSource);
     quickCount.hidden = !count;
     quickCount.textContent = count + " queued";
-    historyUndo.disabled = busy || count > 0 || checkpointIndex <= 0;
-    historyRedo.disabled = busy || count > 0 || checkpointIndex < 0 || checkpointIndex >= checkpoints.length - 1;
+    historyUndo.disabled = busy || rackHasFilterLocks() || count > 0 || checkpointIndex <= 0;
+    historyRedo.disabled = busy || rackHasFilterLocks() || count > 0 || checkpointIndex < 0 || checkpointIndex >= checkpoints.length - 1;
     historyOpen.disabled = busy;
     if (count) window.addEventListener("beforeunload", warnStagedNavigation);
     else window.removeEventListener("beforeunload", warnStagedNavigation);
@@ -600,7 +808,8 @@
 
   function queueUnplug(port) {
     const cable = cables.get(port.cableId);
-    if (!cable?.deletable || !cableInFocus(cable) || !ports.has(cable.a) || !ports.has(cable.b)) {
+    if (!cable?.deletable || !cableDisconnectAllowed(cable) || !cableInFocus(cable) ||
+        !ports.has(cable.a) || !ports.has(cable.b)) {
       announceQuick("Choose a port on an editable cable within the current device and row filters.", true);
       return;
     }
@@ -672,7 +881,8 @@
   }
 
   function navigateHistory(target) {
-    if (!enabled("history") || busy || stagedCount() || target === undefined || target === historyData.cursor) return;
+    if (!enabled("history") || busy || rackHasFilterLocks() || stagedCount() ||
+        target === undefined || target === historyData.cursor) return;
     save({action: "history", target, revision: historyData.revision}, historyDialog.open ? historyError : null);
   }
 
@@ -684,7 +894,7 @@
       const current = checkpoint.sequence === historyData.cursor;
       const entry = button("re-rack-history-entry" + (current ? " re-rack-history-current" : ""));
       entry.dataset.historyTarget = checkpoint.sequence;
-      entry.disabled = current || stagedCount() > 0;
+      entry.disabled = current || stagedCount() > 0 || rackHasFilterLocks();
       if (current) entry.setAttribute("aria-current", "step");
       entry.append(node("span", "fw-semibold", checkpoint.label || "Checkpoint " + checkpoint.sequence));
       if (checkpoint.timestamp) {
@@ -789,6 +999,7 @@
       const offset = gaps.findLast(gap => gap.top <= top)?.offsetAfter ?? 0;
       card.style.setProperty("--re-device-offset", offset + "px");
     }
+    if (!print) positionIndicator?.refresh();
   }
 
   function styleRackArtworkText(element, item, scale) {
@@ -849,35 +1060,55 @@
     for (const device of data.devices) {
       if (!deviceInFocus(device.id)) continue;
       const top = mountedTop(data, device);
-      if (top !== null && (device.fullDepth || rackFaceVisible(device.face))) mounted.push({device, top});
+      if (top !== null) mounted.push({device, top});
     }
 
+    const visible = mounted.filter(({device}) => ["front", "rear"].some(face =>
+      rackFaceVisible(face) && deviceVisibleOnFace(device, face) && (device.fullDepth || device.face === face)));
+    const focused = focusedDevices.size > 0;
+    const occupied = focused ? visible : mounted;
     // Both faces use the same physical-to-visible row map, including any half-unit offsets.
-    const rows = Array.from({length: data.height}, (_, row) => row).filter((row) =>
-      !focusedDevices.size || mounted.some(({device, top}) => row < top + device.height && row + 1 > top)
+    const {rows, rowCount} = globalThis.NbCableEditorCompactUnits.layoutRows(
+      data.height, occupied.map(({device, top}) => ({top, height: device.height})),
+      {compact: viewCompactEmptyUnits.checked, focused},
     );
-    const compactIndex = new Map(rows.map((row, index) => [row, index]));
-    const projected = mounted.map(({device, top}) => {
+    const visualTop = new Map(rows.map(row => [row.start, row.top]));
+    const physicalTop = new Map(rows.map(row => [row.top, row.start]));
+    const projected = visible.map(({device, top}) => {
       const row = Math.floor(top);
-      return {device, top: compactIndex.get(row) + (top - row), physicalTop: top};
+      return {device, top: visualTop.get(row) + (top - row), physicalTop: top};
     });
     const gaps = adjacentDeviceBoundaries(projected);
     const rowNumber = row => startingUnit + (data.descUnits ? row : data.height - row - 1);
-    const rowCount = Math.max(1, rows.length);
-    elevationSpacing = {gaps, rowCount, rows: [], cards: [], focused: focusedDevices.size > 1 && mounted.length > 1};
-    board.style.setProperty("--re-rack-height", rowCount);
+    elevationSpacing = {gaps, rowCount: Math.max(1, rowCount), rows: [], cards: [],
+      focused: focusedDevices.size > 1 && visible.length > 1};
+    board.style.setProperty("--re-rack-height", elevationSpacing.rowCount);
+    board.toggleAttribute("data-compact-empty-units", rows.some(row => row.end - row.start > row.size));
     markers.clear();
     photos.clear();
 
     function appendRows(elevation, numbered = false) {
-      for (const [index, row] of rows.entries()) {
+      for (const row of rows) {
         const tick = node("div", "re-rack-row");
+        const count = row.end - row.start;
+        const collapsed = count > row.size;
+        if (collapsed) tick.dataset.rackCollapsedUnits = count;
         if (numbered) {
-          const label = node("span", "", String(rowNumber(row)));
+          const first = rowNumber(row.start);
+          const last = rowNumber(row.end - 1);
+          const lower = Math.min(first, last);
+          const upper = Math.max(first, last);
+          const label = node("span", "", collapsed ? lower + "–" + upper : String(first));
           label.dataset.rackUnitLabel = "";
+          if (collapsed) {
+            const description = "Empty rack units " + lower + " through " + upper + ", shown as two units";
+            label.title = description;
+            label.setAttribute("role", "img");
+            label.setAttribute("aria-label", description);
+          }
           tick.append(label);
         }
-        elevationSpacing.rows.push({index, tick});
+        elevationSpacing.rows.push({index: row.top, tick});
         elevation.append(tick);
       }
     }
@@ -886,9 +1117,9 @@
     unitElevation.parentElement.hidden = !rows.length;
     appendRows(unitElevation, true);
     for (const gap of gaps) {
-      const lower = rowNumber(rows[Math.floor(gap.top)]);
+      const lower = rowNumber(physicalTop.get(Math.floor(gap.top)));
       const location = Number.isInteger(gap.top)
-        ? "between U " + rowNumber(rows[gap.top - 1]) + " and U " + lower
+        ? "between U " + rowNumber(physicalTop.get(gap.top - 1)) + " and U " + lower
         : "within U " + lower;
       unitElevation.append(gapControl(gap, location));
     }
@@ -905,11 +1136,13 @@
       appendRows(elevation);
 
       for (const {device, top} of projected) {
-        if (device.face !== face && !device.fullDepth) continue;
+        if ((device.face !== face && !device.fullDepth) || !deviceVisibleOnFace(device, face)) continue;
         const side = device.face === face ? "front" : "rear";
         const card = node("div", "re-rack-device");
         card.dataset.routeObstacle = device.id + ":" + face;
         card.dataset.rackDevice = device.id;
+        card.toggleAttribute("data-missing-layout", device.missingLayout === true);
+        card.toggleAttribute("data-rule-gray-box", deviceActions(device.id).grayBox === true);
         card.style.setProperty("--re-device-top", top);
         card.style.setProperty("--re-device-height", device.height);
         elevationSpacing.cards.push({top, card});
@@ -946,13 +1179,17 @@
           const port = ports.get(rawPort.id);
           if (port.face !== side || !placeable(port)) continue;
           const marker = portButton(port, true);
-          marker.hidden = !portRowVisible(port.id);
+          marker.hidden = !portRowVisible(port.id) || portFilterEffect(port.id) === "hide";
+          marker.toggleAttribute("data-rule-hidden", portHiddenByRules(port.id));
           marker.style.left = (port.x * 100) + "%";
           marker.style.top = (port.y * 100) + "%";
           photo.append(marker);
           markers.set(port.id, marker);
         }
         card.append(photo, tools);
+        if (device.missingLayout === true) {
+          card.append(node("span", "re-rack-missing-layout", "Missing devicetype layout"));
+        }
         elevation.append(card);
       }
     }
@@ -978,17 +1215,6 @@
 
   function appendListField(container, kind, key, label, value) {
     if (value) container.append(listField(kind, key, label, value));
-  }
-
-  function endpointPort(endpoint) {
-    return {
-      ...endpoint, id: endpoint.portId, name: endpoint.portName, url: endpoint.portUrl,
-      device: {
-        name: endpoint.deviceName, deviceType: endpoint.deviceType,
-        deviceTypeId: endpoint.deviceTypeId, filterDeviceId: endpoint.filterDeviceId,
-        rackName: endpoint.rackName, url: endpoint.deviceUrl,
-      },
-    };
   }
 
   function cableEndpoint(cable, end) {
@@ -1101,7 +1327,7 @@
       const group = node("div", "re-rack-directory-device");
       const heading = node("h3", "re-rack-directory-heading");
       heading.append(link(device.url, device.name));
-      if (device.layoutUrl) {
+      if (device.layoutUrl && deviceActions(device.id).edit !== false) {
         heading.append(link(device.layoutUrl, "Port layout", "re-rack-layout-link"));
       }
       const list = node("div", "re-rack-directory-ports");
@@ -1162,7 +1388,7 @@
       for (const {port, entry, badge, searchText} of entries) {
         const match = vlanMatches.get(port.id);
         markVlanMatch(entry, match, badge, vid);
-        entry.hidden = !portRowVisible(port.id) || !portFaceVisible(port.id) ||
+        entry.hidden = portHiddenByFilter(port.id) || !portRowVisible(port.id) || !portFaceVisible(port.id) ||
           (offImage.checked && markers.has(port.id)) ||
           (!deviceMatches && !searchText.includes(query)) || (vid !== null && !match);
         hasVisible ||= !entry.hidden;
@@ -1184,7 +1410,7 @@
     return name ? name + " · " + color : color;
   }
 
-  function cableColor(cable) {
+  function baseCableColor(cable) {
     const color = cableHex(cable);
     if (color) return color;
     // Use the same automatic HSL colors as before, represented as sRGB hex.
@@ -1201,8 +1427,31 @@
     ).join("");
   }
 
-  function cableStrokes(stroke, color, cableId) {
+  function cableColor(cable, actions = connectionActions(cable), fallback) {
+    const color = actions.color ?? fallback ?? baseCableColor(cable);
+    if (actions.luminosity == null || actions.luminosity === 100) return color;
+    const factor = actions.luminosity / 100;
+    return "#" + [1, 3, 5].map(offset => {
+      const channel = Number.parseInt(color.slice(offset, offset + 2), 16);
+      const adjusted = factor <= 1 ? channel * factor : channel + (255 - channel) * (factor - 1);
+      return Math.round(Math.max(0, Math.min(255, adjusted))).toString(16).padStart(2, "0");
+    }).join("");
+  }
+
+  function applyCableFormat(element, cable, outline = false, actions = connectionActions(cable)) {
+    if (actions.opacity != null) element.style.opacity = actions.opacity;
+    if (actions.width != null) {
+      element.style.strokeWidth = "calc(" + (actions.width + (outline ? 1.5 : 0)) + "px * var(--re-rack-cable-scale))";
+    }
+    if (actions.lineStyle) {
+      element.style.strokeDasharray = {solid: "none", dashed: "7 5", dotted: "1 4"}[actions.lineStyle];
+    }
+    return element;
+  }
+
+  function cableStrokes(stroke, color, cableId, actions) {
     const path = stroke.getAttribute("d");
+    const cable = cables.get(cableId);
     const rim = wire(path, "re-rack-wire-rim");
     rim.dataset.wireRim = cableId;
     const [r, g, b] = [1, 3, 5].map(offset => {
@@ -1210,12 +1459,16 @@
       return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
     });
     const luminance = .2126 * r + .7152 * g + .0722 * b;
-    // The extra contrast stroke keeps very light or dark cables visible against the page.
     const tone = luminance > .30 ? "light" : luminance < .14 ? "dark" : null;
-    if (!tone) return [rim, stroke];
-    const outline = wire(path, "re-rack-wire-contrast re-rack-wire-contrast-" + tone);
-    outline.dataset.wireContrast = cableId;
-    return [rim, outline, stroke];
+    const strokes = [rim];
+    if (tone) {
+      const outline = wire(path, "re-rack-wire-contrast re-rack-wire-contrast-" + tone);
+      outline.dataset.wireContrast = cableId;
+      strokes.push(outline);
+    }
+    strokes.push(stroke);
+    for (const line of strokes) applyCableFormat(line, cable, line !== stroke, actions);
+    return strokes;
   }
 
   function cableName(cable) {
@@ -1328,7 +1581,7 @@
   }
 
   function canMove(cable) {
-    return !!(data.canChange && cable?.editable && ports.has(cable.a) && ports.has(cable.b));
+    return !!(data.canChange && cable?.editable && !cableLockedByFilter(cable) && ports.has(cable.a) && ports.has(cable.b));
   }
 
   function normalizeConnectionSearch(value) {
@@ -1368,7 +1621,7 @@
     cableButtons.clear();
     connectionIndex.clear();
     for (const cable of cables.values()) {
-      if (!cableMatchesDevice(cable) || !cableHasPortInView(cable)) continue;
+      if (cable.id !== linkedCableId && (!cableMatchesDevice(cable) || !cableHasPortInView(cable))) continue;
       const name = cableName(cable);
       const row = button("btn btn-outline-secondary btn-sm re-rack-cable-button");
       const heading = node("span", "re-rack-connection-name", name);
@@ -1427,6 +1680,7 @@
 
   function filterCableList() {
     const vid = vlanId();
+    const matches = modernRulesActive("connection") ? () => true : matchesConnectionFilter;
     connectionScope.clear();
     for (const [id, row] of cableButtons) {
       const cable = cables.get(id);
@@ -1434,8 +1688,9 @@
       const b = vlanMatches.get(cable.b);
       const match = a && b && a !== b ? "both" : a || b;
       markVlanMatch(row, match, row.querySelector(".re-rack-vlan-badge"), vid);
-      if ((vid === null || match) && (lines.value !== "filtered" ||
-          matchesConnectionFilter(cable, cableEndpoint(cable, "A"), cableEndpoint(cable, "B")))) {
+      if (id === linkedCableId || (cableVisibleByRules(cable) && (vid === null || match) && (lines.value !== "filtered" ||
+          (portFilterEffect(cable.a) !== "hide" && portFilterEffect(cable.b) !== "hide" &&
+            matches(cable, cableEndpoint(cable, "A"), cableEndpoint(cable, "B")))))) {
         connectionScope.add(id);
       }
     }
@@ -1453,12 +1708,12 @@
     for (const [id, row] of cableButtons) {
       const indexed = connectionIndex.get(id);
       let traceHit;
-      const visible = connectionScope.has(id) && terms.every(term => {
+      const visible = id === linkedCableId || (connectionScope.has(id) && terms.every(term => {
         if (matches(indexed, term)) return true;
         const match = indexed.traceEntries.find(entry => matches(entry, term));
         traceHit ??= match;
         return Boolean(match);
-      });
+      }));
       const hidden = !visible;
       if (row.hidden !== hidden) row.hidden = hidden;
       indexed.hint.hidden = hidden || !traceHit;
@@ -1516,6 +1771,16 @@
     return Number(exportResolution.value === "custom" ? exportCustom.value : exportResolution.value);
   }
 
+  function exportMetadata() {
+    return globalThis.NbCableEditorExportMetadata.entries(data, {
+      location: get("export-location").checked,
+      rackId: get("export-rack-id").checked,
+      rackUrl: get("export-rack-url").checked,
+      editorUrl: get("export-editor-url").checked,
+      qr: get("export-qr").checked,
+    }, httpUrl);
+  }
+
   function updateExportOptions() {
     const png = exportFormat.value === "png";
     const custom = png && exportResolution.value === "custom";
@@ -1523,9 +1788,10 @@
     get("export-image-options").hidden = !png;
     get("export-custom-field").hidden = !custom;
     exportCustom.disabled = !custom;
+    get("export-qr").disabled = !get("export-rack-url").checked && !get("export-editor-url").checked;
     exportSubmit.textContent = png ? "Download PNG" : "Print / Save as PDF";
     if (png) {
-      const size = globalThis.NbCableEditorExport.measure(board);
+      const size = globalThis.NbCableEditorExport.measure(board, exportMetadata());
       const result = !custom || exportCustom.validity.valid
         ? globalThis.NbCableEditorExport.dimensions(size, exportLongestEdge()) : null;
       get("export-dimensions").textContent = result ? result.width + " × " + result.height + " px" : "";
@@ -1563,16 +1829,28 @@
     board.dataset.printPlan = "";
     try {
       applyElevationSpacing(true);
-      const job = measureRouting(cable => displayed.has(cable.id) || bundled.has(cable.id), "pcb");
+      const external = externalRoutingCandidates(cable => displayed.has(cable.id), effectiveLineMode());
+      const job = measureRouting(cable => displayed.has(cable.id) || bundled.has(cable.id), "pcb", external);
       const origin = wires.getBoundingClientRect();
       const titles = Array.from(board.querySelectorAll(".re-rack-device-name"), title => relativeRect(title, origin));
-      const paths = computeRoutes({...job, connections: job.connections.filter(({id}) => displayed.has(id))});
+      const paths = computeRoutes({...job, connections: job.connections.filter(({id}) =>
+        displayed.has(id) || displayed.has(job.traceRoutes.get(id)?.cable.id))});
       const printGroups = globalThis.NbCableEditorBundles.group(job.connections.filter(({id}) => bundled.has(id)));
+      const terminals = new Map();
       for (const id of displayed) {
         if (paths.has(id)) continue;
         const cable = cables.get(id);
-        const from = [cable.a, cable.b].find(port => visibleMarker(port));
-        if (from !== undefined) paths.set(id, stubPoints(from, visibleMarker(from), job.protectedAreas));
+        const from = [cable.a, cable.b].find(port => routingMarker(port));
+        if (from === undefined) continue;
+        if (cable.a == null || cable.b == null) {
+          const stub = externalStub(from, job);
+          if (stub) {
+            paths.set(id, stub.points);
+            terminals.set(id, stub);
+          }
+        } else {
+          paths.set(id, stubPoints(from, routingMarker(from), job.protectedAreas));
+        }
       }
       const combined = planVirtualTubes(job, paths);
       return globalThis.NbCableEditorExport.snapshot(board, drawing => {
@@ -1583,6 +1861,8 @@
         const pathsLayer = document.createElementNS(SVG, "g");
         pathsLayer.setAttribute("mask", "url(#" + printMask.id + ")");
         svg.replaceChildren(definitions, pathsLayer);
+        globalThis.NbCableEditorExternalLocationUi.render(drawing.querySelector("[data-external-location-layer]"),
+          job.externalLocations.groups.filter(group => group.routeIds.some(id => paths.has(id))));
         if (printGroups.length) {
           const printBundles = document.createElementNS(SVG, "g");
           svg.insertBefore(printBundles, pathsLayer);
@@ -1594,21 +1874,29 @@
         }
         for (const [id, points] of paths) {
           const cable = cables.get(id);
+          if (!cable) continue;
           const hasA = job.endpoints.has(cable.a);
           const hasB = job.endpoints.has(cable.b);
-          const stub = !hasA || !hasB;
-          const shape = stub ? cableShape(points, hasA ? cable.a : cable.b, undefined, job)
-            : displayedCableShape(cable, points, job, combined.paths);
+          const stub = !job.externalLocations.targets.has(id) && (!hasA || !hasB);
+          const terminal = terminals.get(id);
+          const shape = terminal ?? (stub ? cableShape(points, hasA ? cable.a : cable.b, undefined, job)
+            : displayedCableShape(cable, points, job, combined.paths));
           const color = cableColor(cable);
           const stroke = wire(shape.d, "re-rack-wire re-rack-wire-print", color);
           stroke.style.stroke = color;
           stroke.dataset.wireVisual = id;
-          const strokes = [wire(shape.d, "re-rack-wire-print-casing"), ...cableStrokes(stroke, color, id)];
+          const strokes = [applyCableFormat(wire(shape.d, "re-rack-wire-print-casing"), cable, true),
+            ...cableStrokes(stroke, color, id)];
           if (stub) {
             for (const line of strokes) line.classList.add("re-rack-wire-print-stub");
           }
           pathsLayer.append(...strokes);
+          if (terminal) pathsLayer.append(applyCableFormat(externalTerminal(terminal, color), cable));
         }
+        drawExternalTraceContinuations(pathsLayer, job, paths, id => paths.has(id) || bundled.has(id), true);
+        const virtualPorts = document.createElementNS(SVG, "g");
+        pathsLayer.append(virtualPorts);
+        drawVirtualPortCables(virtualPorts, job);
         if (combined.tubes.length) {
           const sleeves = document.createElementNS(SVG, "g");
           drawVirtualSleeves(sleeves, combined.tubes);
@@ -1619,7 +1907,8 @@
           delete element.dataset.traceTargetStatus;
         }
         if (references.size) globalThis.NbCableEditorPrintLabels.draw(svg, {
-          ...job.bounds, obstacles: [...job.protectedAreas, ...titles], references,
+          ...job.bounds, references,
+          obstacles: [...job.protectedAreas, ...titles, ...job.externalLocations.groups.map(group => group.rect)],
         });
       });
     } finally {
@@ -1640,6 +1929,7 @@
     const paper = get("export-paper").value;
     const orientation = get("export-orientation").value;
     const includeCables = get("export-cables").checked;
+    const metadata = exportMetadata();
     const controls = [...exportForm.querySelectorAll("select, input, button:not([type='submit'])")]
       .filter(control => !control.disabled);
     exporting = true;
@@ -1665,7 +1955,7 @@
       const snapshot = await (png ? globalThis.NbCableEditorExport.snapshot(board) : printRackSnapshot(references, bundleRefs));
       const title = editor.querySelector("h1").textContent.trim();
       if (png) {
-        const blob = await globalThis.NbCableEditorExport.png(snapshot, longest);
+        const blob = await globalThis.NbCableEditorExport.png(snapshot, longest, metadata);
         const url = URL.createObjectURL(blob);
         const download = document.createElement("a");
         download.href = url;
@@ -1676,7 +1966,7 @@
       } else {
         const summary = {front: "Front elevation", rear: "Rear elevation", both: "Front and rear elevations"}[rackFace];
         const printable = await globalThis.NbCableEditorExportPrint.prepare(snapshot, {
-          title, summary, paper, orientation, cables: includeCables ? exportCableRows(ids, references) : null,
+          title, summary, paper, orientation, metadata, cables: includeCables ? exportCableRows(ids, references) : null,
         });
         printable.focus();
         printable.print();
@@ -1893,8 +2183,9 @@
   }
 
   function showDeleteConfirm(show) {
+    if (show && !cableDisconnectAllowed(selectedCable)) return;
     deleteConfirm.hidden = !show;
-    deleteButton.hidden = show || !selectedCable?.deletable;
+    deleteButton.hidden = show || !selectedCable?.deletable || !cableDisconnectAllowed(selectedCable);
     if (show) deleteCancel.focus();
   }
 
@@ -2215,9 +2506,10 @@
   }
 
   function openCableDetails(cable) {
-    if (busy || pending || !cable || !cableMatchesDevice(cable) || quickMode !== "normal") return;
+    if (busy || pending || filterPreview || !cable || !cableMatchesDevice(cable) || quickMode !== "normal") return;
     hideWireTooltip();
     selectCable(cable);
+    if (connectionActions(cable).details === false) return;
 
     const heading = node("div", "re-rack-detail-heading");
     const detailName = () => cableDetailFields.has("label") ? cableName(cable) : "Cable #" + cable.id;
@@ -2251,7 +2543,7 @@
 
     const properties = node("dl", "re-rack-detail-properties");
     const info = [["type", "Type", cable.type || "Not specified"], ["profile", "Profile", cable.profile]];
-    if (!cable.metadataEditable || rackPlan?.inView()) info.push(
+    if (!cable.metadataEditable || cableLockedByFilter(cable) || rackPlan?.inView()) info.push(
       ["color", "Color", colorValue], ["length", "Length", cable.length || "Not specified"],
       ["description", "Description", cable.description], ["tags", "Tags", displayedTags(cable.tags)], ["comments", "Comments", cable.comments],
     );
@@ -2279,11 +2571,12 @@
 
     detailsContent.replaceChildren(heading, route);
     if (properties.childElementCount) detailsContent.append(properties);
-    if (cable.metadataEditable && !rackPlan?.inView()) {
+    if (cable.metadataEditable && !cableLockedByFilter(cable) && !rackPlan?.inView()) {
       detailsContent.append(mountInlineEditor(detailsDialog, "cable", cable, async patch => {
         const payload = await requestMutation(editor.dataset.cableUrl, {action: "update", cable_id: cable.id, ...patch});
         if (payload.id !== cable.id || !payload.cable) throw new Error("NetBox did not confirm the cable update.");
         Object.assign(cable, payload.cable);
+        refreshRuleRendering();
         if (payload.history) readHistory(payload.history);
         title.textContent = detailName();
         updateRouteColor();
@@ -2306,9 +2599,24 @@
     const trace = cableDetailFields.has("trace") && renderCableTrace(cable);
     if (trace) detailsContent.append(trace);
     detailsContent.append(netboxDetailLink(cable.url, "Open cable in NetBox"));
+    shareButton.hidden = !data.cableShareUrl;
+    shareButton.textContent = "Copy cable link";
     setError(detailsError);
     showDeleteConfirm(false);
     detailsDialog.showModal();
+  }
+
+  function confirmCableDeletion(cable) {
+    if (!cableDisconnectAllowed(cable)) return;
+    openCableDetails(cable);
+    if (!detailsDialog.open) {
+      if (selectedCable !== cable) return;
+      detailsContent.replaceChildren(node("p", "re-rack-detail-name", cableName(cable)));
+      shareButton.hidden = true;
+      setError(detailsError);
+      detailsDialog.showModal();
+    }
+    showDeleteConfirm(true);
   }
 
   function portConnectionDetails(port) {
@@ -2320,7 +2628,7 @@
       const state = port.occupancy === "cabled" ? "Cable destination unavailable" : occupancyLabels[port.occupancy];
       section.append(node("p", "re-rack-detail-position", state ?? "Unavailable"));
       const manualConnectUrl = httpUrl(port.manualConnectUrl);
-      if (manualConnectUrl && !stagedByPort.has(port.id) && !rackPlan?.inView()) {
+      if (manualConnectUrl && portConnectAllowed(port.id) && !stagedByPort.has(port.id) && !rackPlan?.inView()) {
         const connect = button("btn btn-outline-primary btn-sm me-auto", "Manual Connect");
         connect.addEventListener("click", () => {
           const url = new URL(manualConnectUrl);
@@ -2355,7 +2663,7 @@
   }
 
   function openPortDetails(port) {
-    if (busy || pending || editor.querySelector("dialog[open]")) return;
+    if (busy || pending || filterPreview || editor.querySelector("dialog[open]")) return;
     finishPortClick();
     hideWireTooltip();
     const heading = node("div", "re-rack-port-detail-heading");
@@ -2385,11 +2693,15 @@
     portDialogContent.replaceChildren(heading);
     const properties = portDetailFields(port, true);
     if (properties.childElementCount) portDialogContent.append(properties);
-    if (port.metadataEditable) {
+    if (portLockedByFilter(port.id)) {
+      portDialogContent.append(node("p", "text-secondary small", "Editing is disabled by this view’s rules."));
+    }
+    if (port.metadataEditable && !portLockedByFilter(port.id)) {
       portDialogContent.append(mountInlineEditor(portDialog, port.kind, port, async patch => {
         const payload = await requestMutation(editor.dataset.portUrl, {port_id: port.id, ...patch});
         if (payload.id !== port.id || typeof payload.label !== "string") throw new Error("NetBox did not confirm the port update.");
         Object.assign(port, payload);
+        refreshRuleRendering();
         if (Object.hasOwn(patch, "label")) {
           updateLabel();
           markers.get(port.id)?.querySelector(".re-rack-port-label")?.replaceWith(markerLabel(port));
@@ -2440,6 +2752,7 @@
   }
 
   function openCableEdit(cable, field = "label") {
+    if (cableLockedByFilter(cable)) return;
     editingCable = cable;
     editForm.reset();
     editForm.elements.label.value = cable.label ?? "";
@@ -2468,7 +2781,7 @@
   }
 
   function openContextMenu(event, keyboard = false) {
-    if (busy || pending || gesture?.moved) return;
+    if (busy || pending || filterPreview || gesture?.moved) return;
     const target = event.target;
     const entry = target.closest("[data-port-directory-id]");
     const port = portAt(target) ?? ports.get(portIdsByDataset.get(entry?.dataset.portDirectoryId));
@@ -2552,8 +2865,8 @@
             saveSelectedConnections([...next]);
           });
         }
-        add("Cable details", () => openCableDetails(cable));
-        if (data.canChange && cable.editable) {
+        if (connectionActions(cable).details !== false) add("Cable details", () => openCableDetails(cable));
+        if (data.canChange && cable.editable && !cableLockedByFilter(cable)) {
           add("Edit cable…", () => openCableEdit(cable));
           add("Change color…", () => openCableEdit(cable, "color"));
         }
@@ -2566,12 +2879,10 @@
       }
       const url = httpUrl(cable.url);
       if (url) add("Open cable in NetBox", () => location.assign(url));
-      if (normal && data.canDelete && cable.deletable) {
+      if (data.cableShareUrl) add("Copy cable link", () => void copyCableLink(cable));
+      if (normal && data.canDelete && cable.deletable && cableDisconnectAllowed(cable)) {
         divider();
-        add("Delete connection…", () => {
-          openCableDetails(cable);
-          showDeleteConfirm(true);
-        }, true);
+        add("Delete connection…", () => confirmCableDeletion(cable), true);
       }
     }
     const first = menu.querySelector("[role=menuitem]");
@@ -2636,9 +2947,16 @@
   }
 
   function displayedCableShape(cable, points, job = geometry, overrides = combinedRoutes) {
+    if (job?.externalLocations.targets.has(cable.id)) {
+      return points ? externalCableShape(cable.id, points, job) : null;
+    }
     const compact = overrides.get(cable.id);
     const route = compact ?? points;
     return route ? cableShape(route, cable.a, cable.b, job, {compact: Boolean(compact)}) : null;
+  }
+
+  function externalCableShape(id, points, job) {
+    return cableShape(points, job.externalPorts.get(id), job.externalLocations.targets.get(id).port, job);
   }
 
   function wire(d, className, color) {
@@ -2793,16 +3111,39 @@
     return [start, turn, end];
   }
 
+  function externalStub(from, job) {
+    const endpoint = job.endpoints.get(from);
+    if (!endpoint) return null;
+    const sourceRect = job.obstacles.find(card => card.id === endpoint.device);
+    const radius = Math.max(3, 4 * cableDrawingScale());
+    const points = externalLocationApi.stub(endpoint, sourceRect, job, {radius});
+    return points ? {...cableShape(points, from, undefined, job), from, stub: true, terminalRadius: radius} : null;
+  }
+
+  function externalTerminal({points, terminalRadius}, color) {
+    const point = points.at(-1);
+    const circle = document.createElementNS(SVG, "circle");
+    circle.setAttribute("cx", point.x);
+    circle.setAttribute("cy", point.y);
+    circle.setAttribute("r", terminalRadius);
+    circle.setAttribute("fill", color);
+    circle.setAttribute("class", "re-rack-external-terminal");
+    return circle;
+  }
+
   function visibleCablePath(cable, preferredPortId) {
-    const a = visibleMarker(cable.a);
-    const b = visibleMarker(cable.b);
-    if (a && b) {
+    const a = routingMarker(cable.a);
+    const b = routingMarker(cable.b);
+    const external = geometry?.externalLocations.targets.has(cable.id);
+    if ((external && routes?.has(cable.id)) || (a && b)) {
       const shape = displayedCableShape(cable, routes?.get(cable.id));
-      return shape ? {...shape, from: cable.a, stub: false} : null;
+      const from = external ? geometry.externalPorts.get(cable.id) : cable.a;
+      return shape ? {...shape, from, stub: false} : null;
     }
-    const from = [preferredPortId, cable.a, cable.b].find(id => visibleMarker(id));
+    const from = [preferredPortId, cable.a, cable.b].find(id => routingMarker(id));
     if (from === undefined) return null;
-    return {...cableShape(stubPoints(from, visibleMarker(from)), from), from, stub: true};
+    if ((cable.a == null || cable.b == null) && geometry) return externalStub(from, geometry);
+    return {...cableShape(stubPoints(from, routingMarker(from)), from), from, stub: true};
   }
 
   function drawTracePreview(cable, end = null) {
@@ -2895,7 +3236,7 @@
   }
 
   function highlightCable(cable, port = null, end = null) {
-    if (cable && !cableMatchesDevice(cable)) return;
+    if (cable && (!cableMatchesDevice(cable) || connectionActions(cable).hover === false)) cable = null;
     if (cable && !cablePassesLineFilter(cable.id)) cable = null;
     if (cable === hoveredCable && port === hoveredPort) {
       if (end !== hoverEnd) {
@@ -2936,7 +3277,7 @@
     hoverFrom = visible.from;
     hoverIsStub = visible.stub;
     const path = visible.d;
-    if (!visible.stub) hoverLayer.append(wire(path, "re-rack-wire-casing"));
+    if (!visible.stub) hoverLayer.append(applyCableFormat(wire(path, "re-rack-wire-casing"), cable, true));
     const className = "re-rack-wire re-rack-wire-hovered" + (visible.stub ? " re-rack-wire-hover-stub" : "");
     const color = cableColor(cable);
     const stroke = wire(path, className, color);
@@ -2964,7 +3305,7 @@
     guideRing.setAttribute("cy", anchor.y);
   }
 
-  function positionWireTooltip(event) {
+  function positionWireTooltip(event, port) {
     const viewport = {right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight};
     const frame = scroll.getBoundingClientRect();
     const origin = wires.getBoundingClientRect();
@@ -2979,6 +3320,16 @@
     );
     const segments = screenSegments(hoverPoints);
     const obstacles = segments.concat(tracePoints.flatMap(screenSegments));
+    const wide = wideTooltipViewport.matches;
+    const marker = wide && port ? visibleMarker(port.id)?.getBoundingClientRect() : null;
+    let portBounds;
+    if (marker) {
+      const left = Math.max(marker.left, clip.left);
+      const top = Math.max(marker.top, clip.top);
+      const right = Math.min(marker.right, clip.right);
+      const bottom = Math.min(marker.bottom, clip.bottom);
+      if (right > left && bottom > top) portBounds = {left, top, right, bottom};
+    }
     const pointer = {x: event.clientX, y: event.clientY};
     let probe = pointer;
     if (hoverIsStub) {
@@ -2990,26 +3341,32 @@
       const {x, y} = gripPoint(from, 12);
       probe = {x: x + origin.left, y: y + origin.top};
     }
-    const anchor = tooltipGeometry.nearestPoint(segments, probe);
+    const anchor = tooltipGeometry.nearestPoint(segments, probe) ?? (portBounds && {
+      x: (portBounds.left + portBounds.right) / 2, y: (portBounds.top + portBounds.bottom) / 2,
+    });
 
     if (!tooltip.hasAttribute("data-docked")) {
       const margin = 8;
       const bounds = {left: margin, top: margin, right: viewport.right - margin, bottom: viewport.bottom - margin};
-      function findPlace() {
+      // The solver measures from the route centerline and marker box. Include the painted outline.
+      const clearance = wide ? 100 + Math.max(4, 4 * cableDrawingScale()) : undefined;
+      function findPlace(gap) {
         const {width, height} = tooltip.getBoundingClientRect();
         return tooltipGeometry.place({
           anchor: anchor ?? pointer, width, height, bounds, segments: obstacles, previous: tooltipPlacement,
+          portBounds, clearance: gap,
         });
       }
-      let placement = findPlace();
+      let placement = findPlace(clearance);
       if (!placement && !tooltip.hasAttribute("data-compact")) {
         tooltip.setAttribute("data-compact", "");
-        placement = findPlace();
+        placement = findPlace(clearance);
       }
       if (!placement && viewport.right <= 480 && tooltip.hasAttribute("data-tooltip-cable") && !tooltip.hasAttribute("data-narrow")) {
         tooltip.setAttribute("data-narrow", "");
-        placement = findPlace();
+        placement = findPlace(clearance);
       }
+      if (!placement && wide) placement = findPlace(75) ?? findPlace(50) ?? findPlace();
       if (placement) {
         tooltipPlacement = placement;
         tooltip.style.left = placement.left + "px";
@@ -3243,6 +3600,7 @@
   function wireHoverTarget(event) {
     if (!contextMenu.hidden || gesture || rackPlan?.isDragging() || busy || event.pointerType === "touch") return null;
     const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("[data-external-location-key], [data-external-location-tooltip]")) return null;
     const inventoryHidden = editor.dataset.planView === "plan";
     const row = target?.closest("[data-cable-list-id]");
     const listedCable = row && cableList.contains(row) ? cables.get(Number(row.dataset.cableListId)) : null;
@@ -3255,8 +3613,10 @@
     }
     const candidate = inventoryHidden ? null : listedCable ?? (port ? cables.get(port.cableId) : cableAt(event));
     const group = expandedBundle && bundleGroups.find(item => item.key === expandedBundle);
-    const cable = candidate && cableMatchesDevice(candidate) && (!group || group.ids.includes(candidate.id)) &&
+    const cable = candidate && cableMatchesDevice(candidate) &&
+      (!group || group.ids.includes(candidate.id) || geometry?.externalLocations.targets.has(candidate.id)) &&
       cablePassesLineFilter(candidate.id) ? candidate : null;
+    if (candidate && connectionActions(candidate).hover === false) return null;
     if (!port && !cable) return null;
     const key = port ? "port:" + port.id : (listedCable ? "list:" : "wire:") + cable.id;
     return {port, cable, listedCable, key};
@@ -3267,7 +3627,7 @@
   }
 
   function queueWireTooltip(event, hover = wireHoverTarget(event)) {
-    if (portDialog.open) return;
+    if (portDialog.open || (panMode && event.target?.closest?.("[data-scroll]") === scroll)) return;
     if (!hover) {
       hideWireTooltip();
       return;
@@ -3300,10 +3660,11 @@
         tooltip.removeAttribute("data-tooltip-cable");
         tooltip.replaceChildren(tooltipEndpoint({port}), renderPortTooltip(port, false));
         tooltip.style.removeProperty("--re-rack-tooltip-accent");
+        tooltipGuide.style.removeProperty("--re-rack-tooltip-accent");
         tooltipKey = key;
       }
       tooltip.hidden = false;
-      positionWireTooltip(event);
+      positionWireTooltip(event, port);
       return;
     }
     if (listedCable && !cable.traceA && !cable.traceB && visibleMarker(cable.a) && visibleMarker(cable.b)) {
@@ -3327,7 +3688,7 @@
       tooltipKey = key;
     }
     tooltip.hidden = false;
-    positionWireTooltip(event);
+    positionWireTooltip(event, port);
   }
 
   function wirePortAt(event) {
@@ -3392,7 +3753,7 @@
     const layouts = new Map();
     for (const [card, {photo, image}] of photos) {
       const rect = card.getBoundingClientRect();
-      const hasImage = Boolean(image?.naturalWidth && image?.naturalHeight);
+      const hasImage = !card.hasAttribute("data-missing-layout") && Boolean(image?.naturalWidth && image?.naturalHeight);
       const scale = hasImage ? Math.min(rect.width / image.naturalWidth, rect.height / image.naturalHeight) : 1;
       const width = hasImage ? image.naturalWidth * scale : rect.width;
       const height = hasImage ? image.naturalHeight * scale : rect.height;
@@ -3565,7 +3926,7 @@
     }
   }
 
-  function measureRouting(acceptCable, strategy) {
+  function measureRouting(acceptCable, strategy, externalRoutes = []) {
     fitPhotos();
     const origin = wires.getBoundingClientRect();
     const obstacles = Array.from(board.querySelectorAll("[data-route-obstacle]"), card => ({
@@ -3592,12 +3953,36 @@
       if (a && b) connections.push({id: cable.id, a, b});
     }
     const bounds = {width: origin.width, height: origin.height};
+    const externalPorts = new Map();
+    const traceRoutes = new Map();
+    const faces = externalRoutes.length ? Object.fromEntries(facePanels.filter(panel => !panel.hidden)
+      .map(panel => [panel.dataset.rackFacePanel, relativeRect(panel, origin)])) : {};
+    const candidates = externalRoutes.flatMap(candidate => {
+      const {id, from, destination} = candidate;
+      const endpoint = endpoints.get(from);
+      if (!endpoint) return [];
+      externalPorts.set(id, from);
+      if (destination) traceRoutes.set(id, candidate);
+      return [{...candidate, endpoint}];
+    });
     const print = board.hasAttribute("data-print-plan");
-    const outline = (strategy === "pcb" ? 2.75 : 4) * cableDrawingScale();
+    const ruleWidth = Math.max(0, ...[...cables.values()].filter(acceptCable)
+      .map(cable => (connectionActions(cable).width ?? 0) + 1.5),
+      ...plannedRuleLines().map(({actions}) => (actions.width ?? 0) + 1.5));
+    const outline = Math.max(strategy === "pcb" ? 2.75 : 4, ruleWidth) * cableDrawingScale();
     const spacing = print ? wideTrackSpacing : Math.ceil(outline + defaultCableGap) + parallelCableGap - defaultCableGap;
     const horizontalSpacing = spacing + extraHorizontalGap;
     const deviceClearance = deviceEdgeClearance + (print ? 5 : outline + 1) / 2;
-    return {connections, obstacles, bounds, protectedAreas, endpoints, strategy, portRects,
+    const externalLocations = externalLocationApi.layout(candidates, {bounds, faces, obstacles}, {
+      gap: baseRackUnit * zoomScale, strategy, deviceClearance,
+    });
+    for (const group of externalLocations.groups) obstacles.push({id: group.key, ...group.rect});
+    for (const [id, target] of externalLocations.targets) {
+      const a = endpoints.get(externalPorts.get(id));
+      endpoints.set(target.port, target);
+      connections.push({id, a, b: target});
+    }
+    return {connections, obstacles, bounds, protectedAreas, endpoints, strategy, portRects, externalLocations, externalPorts, traceRoutes,
       spacing, horizontalSpacing, deviceClearance};
   }
 
@@ -3636,32 +4021,78 @@
   }
 
   function cablePassesLineFilter(id) {
-    return lines.value !== "filtered" || connectionScope.has(id);
+    const cable = cables.get(id);
+    return id === linkedCableId || ((!cable || cableVisibleByRules(cable)) &&
+      (lines.value !== "filtered" || connectionScope.has(id)));
   }
 
   function cableLineVisible(cable, mode) {
-    if (mode === "all") return true;
+    if (!cableVisibleByRules(cable)) return false;
+    if (mode === "all" || cable.id === linkedCableId) return true;
     if (mode === "filtered") return connectionScope.has(cable.id);
     return cable === selectedCable || (mode === "selected" && selectedConnectionIds.has(cable.id));
   }
 
+  function externalRoutingCandidates(acceptCable, mode) {
+    const traceOptions = traceDestinationOptions.filter(({control}) => control.checked);
+    if (editor.dataset.planView === "plan" || (!viewExternalLocations.checked && !traceOptions.length)) return [];
+    const result = [];
+    for (const cable of cables.values()) {
+      if ((cable.a != null && cable.b != null) || !acceptCable(cable) ||
+          !(mode === "bundles" ? connectionScope.has(cable.id) : cableLineVisible(cable, mode))) continue;
+      const from = [cable.a, cable.b].find(id => routingMarker(id));
+      if (from === undefined) continue;
+      const peer = viewExternalLocations.checked ? cable.externalDestinations?.[0] : null;
+      const peerKind = peer && ["location", "rack", "site"].find(kind => peer[kind]?.id != null && peer[kind].name);
+      const traces = new Map();
+      for (const trace of cable.externalTraces ?? []) {
+        if (trace.departurePort !== from) continue;
+        for (const {kind, match} of traceOptions) {
+          const place = trace.destination[match] && trace.destination[kind];
+          if (!place) continue;
+          const key = kind + ":" + place.id;
+          const existing = traces.get(key);
+          if (existing) existing.destinations.push(trace.destination);
+          else traces.set(key, {
+            cable, from, destination: {kind, ...place}, destinations: [trace.destination],
+            incomingPort: trace.incomingPort, incomingCableId: trace.incomingCableId,
+          });
+        }
+      }
+      const legacyTrace = peerKind && traces.get(peerKind + ":" + peer[peerKind].id);
+      if (legacyTrace) legacyTrace.destinations.push(...cable.externalDestinations);
+      const candidates = peerKind && !legacyTrace ? [{cable, from}, ...traces.values()] : [...traces.values()];
+      candidates.forEach((candidate, index) => {
+        const {destination} = candidate;
+        const id = index === 0 ? cable.id : "trace:" + cable.id + ":" + destination.kind + ":" + destination.id;
+        result.push({...candidate, id});
+      });
+    }
+    return result;
+  }
+
   function routeVisibleCables() {
+    sizeRackViewport();
     const strategy = board.dataset.routingStrategy;
     const mode = effectiveLineMode();
     const acceptsCable = cable => cableMatchesDevice(cable) && cablePassesLineFilter(cable.id);
+    const externalRoutes = externalRoutingCandidates(acceptsCable, mode);
+    const showExternal = externalRoutes.length > 0;
+    const externalSpacingChanged = board.hasAttribute("data-external-locations") !== showExternal;
+    board.toggleAttribute("data-external-locations", showExternal);
     const combine = editor.dataset.planView !== "plan" && viewVirtualCombine.checked &&
       (mode === "all" || mode === "selected" || mode === "filtered");
     const tubeCandidates = [];
     let visibleCount = 0;
     for (const cable of cables.values()) {
-      if (!acceptsCable(cable) || !visibleMarker(cable.a) || !visibleMarker(cable.b)) continue;
+      if (!acceptsCable(cable) || !routingMarker(cable.a) || !routingMarker(cable.b)) continue;
       visibleCount++;
-      if (combine && cableLineVisible(cable, mode)) tubeCandidates.push({id: cable.id, a: {port: cable.a}, b: {port: cable.b}});
+      if (combine && connectionActions(cable).virtualPipe !== false && cableLineVisible(cable, mode)) tubeCandidates.push({id: cable.id, a: {port: cable.a}, b: {port: cable.b}});
     }
-    const plannedCount = rackPlan?.lineOperations().filter(cable =>
-      cableMatchesDevice(cable) && visibleMarker(cable.a) && visibleMarker(cable.b)).length ?? 0;
+    const plannedCount = plannedRuleLines().filter(({cable}) =>
+      routingMarker(cable.a) && routingMarker(cable.b)).length;
     // In a dense elevation, leave room for more lanes on both sides and around the top and bottom.
-    const wireCount = editor.dataset.planView === "plan" ? plannedCount : Math.max(visibleCount, plannedCount);
+    const wireCount = editor.dataset.planView === "plan" ? plannedCount : Math.max(visibleCount + externalRoutes.length, plannedCount);
     const extraBay = Math.min(144, Math.max(0, (wireCount - (strategy === "pcb" ? 24 : 14)) * 4));
     let spacingChanged = updateDenseTubeSpace(tubeCandidates);
     if (routingBay !== extraBay) {
@@ -3669,8 +4100,8 @@
       board.style.setProperty("--re-rack-extra-bay", routingBay + "px");
       spacingChanged = true;
     }
-    if (spacingChanged) applyElevationSpacing();
-    const job = measureRouting(acceptsCable, strategy);
+    if (spacingChanged || externalSpacingChanged) applyElevationSpacing();
+    const job = measureRouting(acceptsCable, strategy, externalRoutes);
     const {connections, obstacles, bounds, protectedAreas, portRects, spacing, horizontalSpacing, deviceClearance} = job;
     const key = JSON.stringify([connections, obstacles, bounds, protectedAreas, strategy, spacing, horizontalSpacing, deviceClearance]);
     if (key !== geometryKey) {
@@ -3759,7 +4190,7 @@
   function drawBundles(mode) {
     const active = mode === "bundles";
     bundleGroups = active ? globalThis.NbCableEditorBundles.group(
-      geometry.connections.filter(({id}) => connectionScope.has(id)),
+      geometry.connections.filter(({id}) => connectionScope.has(id) && !geometry.externalLocations.targets.has(id)),
     ) : [];
     const group = bundleGroups.find(item => item.key === expandedBundle);
     expandedBundle = group?.key ?? null;
@@ -3778,9 +4209,14 @@
 
   function planVirtualTubes(job, paths, stubs = new Map()) {
     if (!viewVirtualCombine.checked || paths.size < 3) return {paths: new Map(), tubes: []};
-    const connections = job.connections.filter(({id}) => paths.has(id));
+    const connections = job.connections.filter(({id}) => paths.has(id) && !job.externalLocations.targets.has(id) &&
+      connectionActions(cables.get(id)).virtualPipe !== false);
     const foreignRoutes = new Map(Array.from(stubs, ([id, shape]) => [id, shape.points]));
     for (const [id, points] of paths) {
+      if (job.externalLocations.targets.has(id)) {
+        foreignRoutes.set(id, externalCableShape(id, points, job).points);
+        continue;
+      }
       const cable = cables.get(id);
       const hasA = job.endpoints.has(cable.a);
       const hasB = job.endpoints.has(cable.b);
@@ -3862,15 +4298,17 @@
     const cores = document.createDocumentFragment();
     for (const id of ids) {
       const cable = cables.get(id);
-      if (!cable) continue;
+      if (!cable || connectionActions(cable).hover === false) continue;
       const shape = displayedCableShape(cable, routes?.get(id));
       if (!shape) continue;
       const rim = wire(shape.d, "re-rack-wire-sleeve-member", "#fff");
       rim.setAttribute("stroke-width", laneWidth);
+      if (connectionActions(cable).opacity != null) rim.style.opacity = connectionActions(cable).opacity;
       members.append(rim);
       const stroke = wire(shape.d, "re-rack-wire-sleeve-member", cableColor(cable));
       stroke.setAttribute("stroke-width", laneWidth * .72);
       stroke.dataset.wireSleeveMember = id;
+      if (connectionActions(cable).opacity != null) stroke.style.opacity = connectionActions(cable).opacity;
       cores.append(stroke);
     }
     members.append(cores);
@@ -3887,6 +4325,49 @@
     activeSleeves = next;
   }
 
+  function drawExternalTraceContinuations(layer, job, paths, incomingVisible, print = false) {
+    const handoffs = new Set();
+    const pairsByDevice = new Map();
+    for (const [id, trace] of job.traceRoutes) {
+      const points = paths.get(id);
+      if (!points || !job.externalLocations.targets.has(id)) continue;
+      const {cable, from, incomingPort, incomingCableId} = trace;
+      const color = cableColor(cable);
+      const handoff = incomingPort + ">" + from;
+      if (incomingVisible(incomingCableId) && !handoffs.has(handoff)) {
+        const a = job.endpoints.get(incomingPort);
+        const b = job.endpoints.get(from);
+        if (a && b && incomingPort !== from) {
+          handoffs.add(handoff);
+          const pair = a.device + ">" + b.device;
+          if (!pairsByDevice.has(pair)) pairsByDevice.set(pair, []);
+          pairsByDevice.get(pair).push({a, b, cable, color});
+        }
+      }
+      if (id === cable.id) continue;
+      const {d} = externalCableShape(id, points, job);
+      const stroke = wire(d, "re-rack-wire" + (print ? " re-rack-wire-print" : ""), color);
+      stroke.dataset.externalTraceRoute = id;
+      if (print) stroke.style.stroke = color;
+      layer.append(...cableStrokes(stroke, color, cable.id));
+    }
+    for (const pairs of pairsByDevice.values()) {
+      pairs.sort((left, right) => left.a.x - right.a.x || left.a.y - right.a.y);
+      const scale = cableDrawingScale();
+      const step = Math.min(5, 22 / Math.max(1, pairs.length - 1)) * scale;
+      for (const [index, {a, b, cable, color}] of pairs.entries()) {
+        const bend = Math.sign(b.x - a.x) * Math.min(12 * scale, Math.abs(b.x - a.x) / 4);
+        const lane = (a.y + b.y) / 2 + (index - (pairs.length - 1) / 2) * step;
+        const points = pairs.length > 1 && a.device !== b.device
+          ? [a, {x: a.x + bend, y: lane}, {x: b.x - bend, y: lane}, b]
+          : [a, b];
+        const stroke = wire(pathData(points), "re-rack-wire re-rack-wire-trace-passthrough", color);
+        stroke.dataset.tracePassthrough = String(cable.id);
+        layer.append(applyCableFormat(stroke, cable));
+      }
+    }
+  }
+
   function drawCablePaths(mode) {
     const pointer = cableHoverPointer;
     const previousHoverKey = hoverTargetKey;
@@ -3895,15 +4376,22 @@
     shownRoutes.clear();
     const group = drawBundles(mode);
     const individualIds = new Set(group?.ids);
-    const visibleRoutes = new Map([...routes].filter(([id]) => mode === "bundles"
-      ? individualIds.has(id) : cableLineVisible(cables.get(id), mode)));
+    const visibleRoutes = new Map([...routes].filter(([id]) => id === linkedCableId ||
+      geometry.externalLocations.targets.has(id) || (mode === "bundles"
+      ? individualIds.has(id) : cableLineVisible(cables.get(id), mode))));
     const restrictedMode = mode === "selected" || mode === "filtered";
     const stubCandidates = mode === "bundles"
       ? group ? [] : Array.from(connectionScope, id => cables.get(id))
-      : restrictedMode || cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
+      : mode === "all" || restrictedMode || cableFocusDevice ? cables.values() : selectedCable ? [selectedCable] : [];
     const stubs = new Map();
-    for (const cable of stubCandidates) {
-      if (!cableMatchesDevice(cable) || routes.has(cable.id) || (restrictedMode && !cableLineVisible(cable, mode))) continue;
+    const linkedCable = cables.get(linkedCableId);
+    const candidates = linkedCable ? new Set([...stubCandidates, linkedCable]) : stubCandidates;
+    for (const cable of candidates) {
+      if (!cableVisibleByRules(cable) || !cableMatchesDevice(cable) || routes.has(cable.id) ||
+          (restrictedMode && !cableLineVisible(cable, mode))) continue;
+      const external = cable.a == null || cable.b == null;
+      if (mode === "all" && !external && !cableFocusDevice && cable !== selectedCable && cable.id !== linkedCableId &&
+          ![cable.a, cable.b].some(id => ports.get(id)?.fallbackLayout && visibleMarker(id))) continue;
       const shape = visibleCablePath(cable);
       if (shape?.stub) stubs.set(cable.id, shape);
     }
@@ -3914,17 +4402,19 @@
     let selection = [];
     for (const [id, route] of visibleRoutes) {
       const cable = cables.get(id);
+      if (!cable) continue;
       const active = cable === selectedCable;
       const {d: path, points} = displayedCableShape(cable, route);
       shownRoutes.set(id, points);
       const color = cableColor(cable);
       const stroke = wire(path, "re-rack-wire" + (active ? " re-rack-wire-selected" : ""), color);
       stroke.dataset.wireVisual = id;
+      if (geometry.traceRoutes.has(id)) stroke.dataset.externalTraceRoute = id;
       stroke.classList.toggle("re-rack-wire-staged-unplug", stagedDeletes.has(id));
       const hit = wire(path, "re-rack-wire-hit");
       hit.dataset.wire = id;
       const strokes = cableStrokes(stroke, color, cable.id);
-      if (active) selection = [wire(path, "re-rack-wire-casing"), ...strokes, hit];
+      if (active) selection = [applyCableFormat(wire(path, "re-rack-wire-casing"), cable, true), ...strokes, hit];
       else fragment.append(...strokes, hit);
 
       const length = points.slice(1).reduce((total, point, index) =>
@@ -3932,8 +4422,8 @@
       if (canMove(cable) && length >= 28) {
         const a = clearGrip(points, length);
         const b = clearGrip(points.slice().reverse(), length);
-        if (a) handles.append(...cableHandle(cable, cable.a, a.x, a.y, color));
-        if (b) handles.append(...cableHandle(cable, cable.b, b.x, b.y, color));
+        if (a && portDisconnectAllowed(cable.a)) handles.append(...cableHandle(cable, cable.a, a.x, a.y, color));
+        if (b && portDisconnectAllowed(cable.b)) handles.append(...cableHandle(cable, cable.b, b.x, b.y, color));
       }
     }
     for (const [id, visible] of stubs) {
@@ -3941,21 +4431,30 @@
       const active = cable === selectedCable;
       const color = cableColor(cable);
       const path = visible.d;
-      const style = active ? " re-rack-wire-selected re-rack-wire-selected-stub" : " re-rack-wire-focus-stub";
+      const terminal = visible.terminalRadius != null;
+      const style = (active ? " re-rack-wire-selected re-rack-wire-selected-stub" : " re-rack-wire-focus-stub") +
+        (terminal ? " re-rack-wire-external-stub" : "");
       const stroke = wire(path, "re-rack-wire" + style, color);
       stroke.dataset.wireVisual = id;
       const strokes = cableStrokes(stroke, color, id);
-      if (cableFocusDevice || mode === "bundles" || restrictedMode) {
+      if (terminal || cableFocusDevice || mode === "bundles" || restrictedMode || id === linkedCableId ||
+          (mode === "all" && ports.get(visible.from)?.fallbackLayout)) {
         const hit = wire(path, "re-rack-wire-hit");
         hit.dataset.wire = id;
         shownRoutes.set(id, visible.points);
         strokes.push(hit);
       }
+      if (terminal) strokes.push(applyCableFormat(externalTerminal(visible, color), cable));
       if (active) selection.push(...strokes);
       else fragment.append(...strokes);
     }
+    const bundledIds = new Set(collapsedBundleGroups().flatMap(item => item.ids));
+    drawExternalTraceContinuations(fragment, geometry, visibleRoutes,
+      id => visibleRoutes.has(id) || stubs.has(id) || bundledIds.has(id));
     fragment.append(...selection);
     wireLayer.replaceChildren(fragment);
+    externalLocationUi.draw(geometry.externalLocations.groups.filter(group =>
+      group.routeIds.some(id => visibleRoutes.has(id))));
     handleLayer.replaceChildren(handles);
     const sleeves = drawVirtualSleeves(sleeveLayer, combined.tubes);
     cableSleeves = sleeves.byCable;
@@ -3970,32 +4469,73 @@
     if (exportDialog.open && !exporting) updateExportOptions();
   }
 
+  function drawVirtualPortCables(layer, job = geometry) {
+    layer.replaceChildren();
+    if (!job || effectiveLineMode() === "none") return;
+    for (const port of ports.values()) {
+      if (port.cableId != null || port.occupancy !== "free" || !visibleMarker(port.id) ||
+          interfaceActions(port.id).virtualCable !== true || deviceActions(port.device.id).cables === false) continue;
+      const shape = externalStub(port.id, job);
+      if (!shape) continue;
+      const color = interfaceActions(port.id).color ?? "#94a3b8";
+      const stroke = wire(shape.d, "re-rack-wire re-rack-virtual-port-cable", color);
+      stroke.dataset.virtualPortCable = port.id;
+      layer.append(stroke);
+    }
+  }
+
+  function plannedRuleLine(operation) {
+    const original = cables.get(operation.cable_id);
+    const cable = {
+      ...original, ...operation,
+      id: original?.id ?? "plan:" + (operation.id ?? "draft"),
+      a: operation.a ?? original?.a ?? operation.before?.a,
+      b: operation.b ?? original?.b ?? operation.before?.b,
+      typeValue: operation.type ?? original?.typeValue ?? "",
+      lengthValue: operation.length ?? original?.lengthValue ?? null,
+      lengthUnit: operation.length_unit ?? original?.lengthUnit ?? "",
+    };
+    const actions = connectionRuleEvaluator(cable, cableEndpoint(cable, "A"), cableEndpoint(cable, "B"));
+    return {operation, cable, actions};
+  }
+
+  function plannedRuleLines() {
+    return (rackPlan?.lineOperations() ?? []).map(plannedRuleLine)
+      .filter(({cable, actions}) => cableMatchesDevice(cable) && cableVisibleByRules(cable, actions));
+  }
+
   function drawPlanWires() {
     if (!rackPlan || !geometry) return;
-    const operations = rackPlan.lineOperations().filter(cableMatchesDevice);
+    const lines = plannedRuleLines();
     const active = rackPlan.activeLine();
-    const key = JSON.stringify([operations, active]);
+    const key = JSON.stringify([lines.map(({operation, actions}) => [operation, actions]), active]);
     if (drawnPlanGeometry !== geometry || drawnPlanKey !== key) {
-      const {endpoints, obstacles, bounds, protectedAreas, strategy, spacing, horizontalSpacing, deviceClearance} = geometry;
-      const connections = operations.flatMap(operation => {
-        const a = endpoints.get(operation.a);
-        const b = endpoints.get(operation.b);
-        return a && b ? [{id: operation.id, a, b, operation}] : [];
+      const {endpoints, obstacles, bounds, protectedAreas, strategy} = geometry;
+      const connections = lines.flatMap(line => {
+        const a = endpoints.get(line.cable.a);
+        const b = endpoints.get(line.cable.b);
+        return a && b ? [{id: line.operation.id, a, b, ...line}] : [];
       });
+      const widest = Math.max(0, ...connections.map(({actions}) => (actions.width ?? 0) + 1.5));
+      const outline = widest * cableDrawingScale();
+      const spacing = Math.max(geometry.spacing, Math.ceil(outline + defaultCableGap) + parallelCableGap - defaultCableGap);
+      const horizontalSpacing = Math.max(geometry.horizontalSpacing, spacing + extraHorizontalGap);
+      const deviceClearance = Math.max(geometry.deviceClearance, deviceEdgeClearance + (outline + 1) / 2);
       const paths = globalThis.NbCableEditorRouting.routeCables(
         connections, obstacles, bounds, protectedAreas, {strategy, spacing, horizontalSpacing, deviceClearance},
       );
       const fragment = document.createDocumentFragment();
-      for (const {id, operation, a, b} of connections) {
+      for (const {id, operation, cable, actions, a, b} of connections) {
         const route = paths.get(id);
         if (!route) continue;
         const shape = cableShape(route, a.port, b.port);
-        const color = cableHex(operation) || cableHex(cables.get(operation.cable_id) ?? {}) || "#7b63df";
+        const fallback = cableHex(operation) || cableHex(cable) || "#7b63df";
+        const color = cableColor(cable, actions, fallback);
         const stroke = wire(shape.d, "re-rack-wire re-rack-wire-plan", color);
         if (active === id) stroke.classList.add("re-rack-wire-plan-active");
         const hit = wire(shape.d, "re-rack-wire-plan-hit");
         hit.dataset.planWire = id;
-        const strokes = cableStrokes(stroke, color, id);
+        const strokes = cableStrokes(stroke, color, id, actions);
         for (const outline of strokes.slice(0, -1)) outline.classList.add("re-rack-wire-plan-rim");
         fragment.append(...strokes, hit);
       }
@@ -4024,13 +4564,15 @@
       clearTimeout(zoomPreferenceTimer);
       zoomPreferenceTimer = setTimeout(saveCustomZoom, 140);
     }
+    const mode = effectiveLineMode();
+    if ((viewExternalLocations.checked || traceDestinationOptions.some(({control}) => control.checked)) &&
+        (mode === "selected" || mode === "none") && selectedCable !== drawnSelection) routes = null;
     routes ??= routeVisibleCables();
     if (view?.anchor.element.isConnected) {
       const rect = view.anchor.element.getBoundingClientRect();
       scroll.scrollLeft += rect.left + rect.width * view.anchor.x - view.point.x;
       scroll.scrollTop += rect.top + rect.height * view.anchor.y - view.point.y;
     }
-    const mode = effectiveLineMode();
     if (routes !== drawnRoutes || mode !== drawnMode || selectedCable !== drawnSelection) {
       drawCablePaths(mode);
       drawnRoutes = routes;
@@ -4038,6 +4580,7 @@
       drawnSelection = selectedCable;
     }
     drawPlanWires();
+    drawVirtualPortCables(virtualPortLayer);
 
     previewLayer.replaceChildren();
     if (quickMode === "connect" && mode !== "none") {
@@ -4103,6 +4646,7 @@
     }
     rackPlan?.markPorts();
     cancel.hidden = busy || !source || Boolean(pending);
+    refreshViewportControls();
     scheduleDraw();
   }
 
@@ -4123,9 +4667,10 @@
   }
 
   function canStart(port) {
-    if (busy || pending || port.blocked || !portRowVisible(port.id) || !portFaceVisible(port.id) ||
+    if (busy || pending || portLockedByFilter(port.id) || port.blocked || !portRowVisible(port.id) || !portFaceVisible(port.id) ||
         stagedByPort.has(port.id) || stagedDeletes.has(port.cableId)) return false;
-    return port.cableId === null ? data.canAdd : canMove(cables.get(port.cableId));
+    return port.cableId === null ? data.canAdd && portConnectAllowed(port.id)
+      : portDisconnectAllowed(port.id) && canMove(cables.get(port.cableId));
   }
 
   function chooseSource(port) {
@@ -4175,6 +4720,23 @@
   }
 
   async function requestMutation(endpoint, body) {
+    const locked = operation => {
+      const cable = cables.get(operation.cable_id);
+      if (operation.action === "history") return rackHasFilterLocks();
+      if (operation.action === "delete") return !cableDisconnectAllowed(cable);
+      if (operation.action === "update") return cableLockedByFilter(cable);
+      if (operation.source != null) {
+        const sourceAllowed = operation.cable_id == null
+          ? portConnectAllowed(operation.source) : portDisconnectAllowed(operation.source);
+        if (!sourceAllowed || !portConnectAllowed(operation.target)) return true;
+      }
+      return cableLockedByFilter(cable);
+    };
+    if (globalViewPreview || filterPreview || (endpoint === editor.dataset.portUrl && portLockedByFilter(body.port_id)) ||
+        (endpoint === editor.dataset.cableUrl && (locked(body) || (Array.isArray(body.operations) && body.operations.some(locked)) ||
+          (body.action === "history" && rackHasFilterLocks())))) {
+      throw new Error("Editing is disabled by the active filter or preview.");
+    }
     const url = httpUrl(endpoint);
     const csrf = editor.querySelector("[name=csrfmiddlewaretoken]")?.value;
     if (!url || !csrf) throw new Error("The editor could not start this request. Refresh the page and try again.");
@@ -4187,6 +4749,34 @@
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "NetBox could not apply this change. Refresh if the rack changed.");
     return payload;
+  }
+
+  async function copyCableLink(cable) {
+    if (!cable || !data.cableShareUrl || sharingCable || filterPreview) return;
+    sharingCable = true;
+    shareButton.disabled = true;
+    try {
+      const payload = await requestMutation(data.cableShareUrl, {
+        cableId: cable.id, settings: captureRackView({effectiveFace: true}),
+      });
+      const url = httpUrl(payload.url);
+      if (!url) throw new Error("NetBox did not return a cable link.");
+      shareInput.value = url;
+      try {
+        await navigator.clipboard.writeText(url);
+        announce("Cable link copied.");
+        if (detailsDialog.open) shareButton.textContent = "Link copied";
+      } catch {
+        shareDialog.showModal();
+        shareInput.select();
+      }
+    } catch (error) {
+      if (detailsDialog.open) setError(detailsError, error.message);
+      announce(error.message, true);
+    } finally {
+      sharingCable = false;
+      shareButton.disabled = false;
+    }
   }
 
   async function save(body, errorBox) {
@@ -4282,7 +4872,7 @@
   }
 
   function activatePort(port) {
-    if (busy || pending || editor.querySelector("dialog[open]")) return;
+    if (busy || pending || filterPreview || editor.querySelector("dialog[open]")) return;
     if (quickMode !== "normal") {
       if (quickPortVisible(port)) {
         if (quickMode === "unplug") queueUnplug(port);
@@ -4349,6 +4939,7 @@
   }
 
   function readViewPreferences(key) {
+    if (globalViewPreview) return {};
     try {
       return JSON.parse(localStorage.getItem(key)) ?? {};
     } catch {
@@ -4357,11 +4948,31 @@
   }
 
   function writeViewPreferences(key, preferences) {
+    if (globalViewPreview) return;
     try {
       localStorage.setItem(key, JSON.stringify(preferences));
     } catch {
       // The editor can still be used if browser storage is disabled.
     }
+  }
+
+  function savePersonalPreferences(group, legacyKey, patch) {
+    if (personalUsesSystemDefaults) {
+      const preferences = readViewPreferences(rackPreferencesKey);
+      writeViewPreferences(rackPreferencesKey, {
+        ...preferences, useSystemDefaults: true, [group]: {...preferences[group], ...patch},
+      });
+    } else {
+      writeViewPreferences(legacyKey, {...readViewPreferences(legacyKey), ...patch});
+    }
+  }
+
+  function clearPersonalRackSettings(followDefault) {
+    // Keep this rack on system defaults instead of inheriting the old browser-wide preferences.
+    personalUsesSystemDefaults = true;
+    preferSystemView = !followDefault;
+    writeViewPreferences(rackPreferencesKey, {useSystemDefaults: true, preferSystemView: preferSystemView || undefined});
+    return {};
   }
 
   function restoreSelect(control, value) {
@@ -4371,7 +4982,9 @@
   function displayPreferences() {
     return {
       connections: viewConnections.checked, directory: viewDirectory.checked, trim: viewTrim.checked,
-      virtualCombine: viewVirtualCombine.checked,
+      virtualCombine: viewVirtualCombine.checked, externalLocations: viewExternalLocations.checked,
+      compactEmptyUnits: viewCompactEmptyUnits.checked,
+      ...Object.fromEntries(traceDestinationOptions.map(({key, control}) => [key, control.checked])),
       connectionsOpen: connectionsSection.open, directoryOpen: directorySection.open,
       zoom: zoomPreference(), lines: lines.value, images: deviceImages.value,
       interfaceHighlight: interfaceHighlight.value, routingStrategy: routingStrategy.value, portFill: portFill.value,
@@ -4395,9 +5008,7 @@
     if (savedViews?.activeId != null) return;
     const values = displayPreferences();
     keys = keys.filter(key => !displayFeatures[key] || enabled(displayFeatures[key]));
-    writeViewPreferences(viewPreferencesKey, {
-      ...readViewPreferences(viewPreferencesKey), ...Object.fromEntries(keys.map(key => [key, values[key]])),
-    });
+    savePersonalPreferences("display", viewPreferencesKey, Object.fromEntries(keys.map(key => [key, values[key]])));
   }
 
   function rackViewPreferences(face = rackFaceOverride) {
@@ -4407,6 +5018,7 @@
       vlan: vlanQuery.value, vlanKind: vlanKind.value, search: search.value, offImage: offImage.checked,
       connectionSearch: connectionSearch.value,
       deviceGaps: Object.fromEntries(savedGaps),
+      positionIndicator: viewPositionIndicator.checked,
       expandedBundle,
     }, originalView.rack, rackFeatures);
   }
@@ -4421,16 +5033,25 @@
       rack: rackViewPreferences(effectiveFace ? rackFace : rackFaceOverride),
       listFields: retainLockedPreferences(fields, originalView.listFields, listFeatures),
       selectedConnections: [...selectedConnectionIds],
-      connectionFilter,
+      connectionFilter, portFilter, portFilterAction,
+      ...captureRules(),
       toolbar: toolbar.snapshot(),
     };
   }
 
   function saveRackPreferences() {
-    if (savedViews?.activeId != null) return;
-    writeViewPreferences(rackPreferencesKey, {
-      ...rackViewPreferences(), selectedConnections: [...selectedConnectionIds], connectionFilter,
-    });
+    if (globalViewPreview || savedViews?.activeId != null) return;
+    const settings = {
+      ...rackViewPreferences(), selectedConnections: [...selectedConnectionIds],
+      connectionFilter, portFilter, portFilterAction,
+      ...captureRules(),
+    };
+    if (personalUsesSystemDefaults) {
+      const {display, listFields} = readViewPreferences(rackPreferencesKey);
+      Object.assign(settings, {useSystemDefaults: true, display, listFields});
+    }
+    if (preferSystemView) settings.preferSystemView = true;
+    writeViewPreferences(rackPreferencesKey, settings);
   }
 
   function applyViewOptions() {
@@ -4451,6 +5072,9 @@
       zoom.value = value;
     } else if (value === "fit") {
       zoom.value = "horizontal-fit";
+    } else if (viewDefaults.legacyFixedZoomScales?.includes(value)) {
+      zoom.querySelector("optgroup:last-of-type").append(new Option(zoomPercentage(Number(value)), value));
+      zoom.value = value;
     } else {
       const scale = Number(value);
       if (scale >= minFitScale && scale <= maxManualScale) showCustomZoom(scale);
@@ -4462,11 +5086,62 @@
     return viewportZoom ? String(viewportZoom.scale) : zoom.value === "custom" ? String(customZoomScale) : zoom.value;
   }
 
+  function zoomPercentage(scale) {
+    return Math.round(scale / (viewDefaults.zoomReferenceScale ?? 1) * 100) + "%";
+  }
+
   function showCustomZoom(scale) {
     customZoomScale = scale;
     customZoomOption.hidden = false;
-    customZoomOption.textContent = Math.round(scale * 100) + "% · Custom";
+    customZoomOption.textContent = zoomPercentage(scale) + " · Custom";
     zoom.value = "custom";
+  }
+
+  function canPanRack() {
+    return !busy && !pending;
+  }
+
+  function refreshViewportControls() {
+    const scale = viewportZoom?.scale ?? zoomScale;
+    const locked = !canPanRack();
+    zoom.disabled = locked;
+    zoomIn.disabled = locked || scale >= maxManualScale;
+    zoomOut.disabled = locked || scale <= minFitScale;
+    panButton.disabled = locked && !panMode;
+  }
+
+  function setPanMode(active) {
+    if (active === panMode || (active && (!toolbar.isVisible("zoom") || !canPanRack()))) return;
+    panMode = active;
+    scroll.toggleAttribute("data-pan-mode", active);
+    panButton.setAttribute("aria-pressed", String(active));
+    if (active) {
+      finishPortClick();
+      closeContextMenu();
+      hideWireTooltip();
+    } else {
+      viewport?.cancelPan();
+    }
+    refreshViewportControls();
+  }
+
+  function setViewportZoom(scale, anchor, point) {
+    if (!viewportZoom) {
+      hideWireTooltip();
+      closeContextMenu(true);
+    }
+    viewportZoom = {scale: Math.max(minFitScale, Math.min(maxManualScale, scale)), anchor, point};
+    invalidateRoutes();
+  }
+
+  function stepZoom(factor) {
+    if (!toolbar.isVisible("zoom") || !canPanRack()) return;
+    const rect = scroll.getBoundingClientRect();
+    const point = {
+      x: rect.left + scroll.clientLeft + scroll.clientWidth / 2,
+      y: rect.top + scroll.clientTop + scroll.clientHeight / 2,
+    };
+    setViewportZoom((viewportZoom?.scale ?? zoomScale) * factor, rackAnchor(point), point);
   }
 
   function saveCustomZoom() {
@@ -4497,27 +5172,38 @@
       board.style.setProperty("--re-rack-unit", (baseRackUnit * scale) + "px");
       applyElevationSpacing();
     }
+    refreshViewportControls();
   }
 
-  function rackViewportHeight() {
+  function sizeRackViewport() {
     const viewportHeight = window.visualViewport?.height ?? document.documentElement.clientHeight;
-    const scrollTop = Math.max(0, scroll.getBoundingClientRect().top);
-    const fitHeight = Math.max(1, Math.floor(viewportHeight - scrollTop - 12));
-    const maxHeight = fitHeight + "px";
-    if (workspace.style.getPropertyValue("--re-rack-fit-height") !== maxHeight) {
-      workspace.style.setProperty("--re-rack-fit-height", maxHeight);
+    const bottomPadding = parseFloat(getComputedStyle(editor.parentElement).paddingBottom) || 0;
+    const pageMargin = pageBody ? parseFloat(getComputedStyle(pageBody).marginBottom) || 0 : 0;
+    const end = viewportHeight - (pageFooter?.offsetHeight ?? 0) - bottomPadding - pageMargin - 4;
+    // Use document coordinates so scrolling the outer page cannot grow the canvas.
+    const available = element => Math.max(160, Math.floor(end - element.getBoundingClientRect().top - window.scrollY));
+    const heights = [
+      ["--re-rack-viewport-height", available(scroll)],
+      ["--re-rack-panel-height", available(rackPanel)],
+    ];
+    for (const [property, height] of heights) {
+      const value = height + "px";
+      if (workspace.style.getPropertyValue(property) !== value) workspace.style.setProperty(property, value);
     }
-    return fitHeight;
   }
 
   function fitRack(crop = 1) {
     if (!elevationSpacing || !scroll.clientWidth) return;
-    const fitHeight = rackViewportHeight();
+    const fitHeight = scroll.offsetHeight;
     const style = getComputedStyle(board);
     const faceCount = rackFace === "both" ? 2 : 1;
     const gutterWidth = faceCount === 2 ? parseFloat(style.gridTemplateColumns.split(" ")[1]) : 0;
-    const width = scroll.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - gutterWidth;
-    const widthScale = (width - 1) / (faceCount * baseFaceWidth * crop);
+    const locationSides = board.hasAttribute("data-external-locations") ? 2 : 0;
+    const currentUnit = parseFloat(style.getPropertyValue("--re-rack-unit")) || baseRackUnit;
+    // Fit the zoom-dependent location clearance together with the rack faces.
+    const width = scroll.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - gutterWidth +
+      locationSides * currentUnit;
+    const widthScale = (width - 1) / (faceCount * baseFaceWidth * crop + locationSides * baseRackUnit);
     let scale = widthScale;
     if (zoom.value !== "horizontal-fit") {
       const heading = facePanels.find(panel => !panel.hidden).firstElementChild;
@@ -4566,8 +5252,6 @@
     if (isFitZoom()) {
       board.style.setProperty("--re-rack-fit-cable-scale", cableDrawingScale());
     } else {
-      if (adaptive) rackViewportHeight();
-      else workspace.style.removeProperty("--re-rack-fit-height");
       applyZoomScale(adaptive ? customZoomScale : Number(zoom.value));
     }
   }
@@ -4699,6 +5383,7 @@
     hideWireTooltip();
     drawTracePreview(null);
     wireLayer.replaceChildren();
+    externalLocationUi.draw([]);
     sleeveLayer.replaceChildren();
     sleeveAreas = [];
     combinedRoutes.clear();
@@ -4709,7 +5394,7 @@
   }
 
   function persistViewFilters() {
-    if (savedViews?.activeId != null) return;
+    if (globalViewPreview || savedViews?.activeId != null) return;
     const url = new URL(location.href);
     for (const [key, value] of Object.entries({
       devices: [...focusedDevices].join(","), cableDevice: cableFocusDevice?.id,
@@ -4771,7 +5456,7 @@
 
   function applyPortRows() {
     clearViewInteraction();
-    for (const [port, marker] of markers) marker.hidden = !portRowVisible(port);
+    for (const [port, marker] of markers) marker.hidden = !portRowVisible(port) || portHiddenByFilter(port);
     refreshVisibleConnections();
     updatePortRows();
   }
@@ -4825,6 +5510,9 @@
     viewDirectory.checked = value("directory") !== false;
     viewTrim.checked = enabled("trim") && value("trim") === true;
     viewVirtualCombine.checked = enabled("virtualCombine") && value("virtualCombine") === true;
+    viewExternalLocations.checked = enabled("externalLocations") && value("externalLocations") === true;
+    viewCompactEmptyUnits.checked = enabled("compactEmptyUnits") && value("compactEmptyUnits") === true;
+    for (const {key, control} of traceDestinationOptions) control.checked = enabled(key) && value(key) === true;
     connectionsSection.open = display.connectionsOpen !== false;
     directorySection.open = display.directoryOpen !== false;
     viewportZoom = null;
@@ -4844,9 +5532,68 @@
     vlanColorSettings = vlanColors.restore(display.vlanColors);
   }
 
+  const filterFeatures = {vlan: enabled("vlan"), rackId: data.rackId, locationId: data.locationId, siteId: data.siteId};
+
   function setConnectionFilter(tree) {
     connectionFilter = tree ?? connectionFilterApi.empty();
-    matchesConnectionFilter = connectionFilterApi.compile(connectionFilter, {vlan: enabled("vlan")});
+    matchesConnectionFilter = connectionFilterApi.compile(connectionFilter, filterFeatures);
+  }
+
+  function portFilterSettings(tree, action) {
+    const matches = connectionFilterApi.compilePort(tree, filterFeatures);
+    const excluded = new Set([...ports.values()].filter(port => !matches(port)).map(port => port.id));
+    return {action, excluded};
+  }
+
+  function setPortFilter(tree, action) {
+    portFilter = tree ?? connectionFilterApi.empty();
+    portFilterAction = ["block", "hide", "mark"].includes(action) ? action : "block";
+    portFilterRule = portFilterSettings(portFilter, portFilterAction);
+  }
+
+  function captureRules() {
+    return Object.fromEntries(Object.entries(ruleSettings)
+      .filter(([, rules]) => Array.isArray(rules))
+      .map(([kind, rules]) => [kind + "Rules", structuredClone(rules)]));
+  }
+
+  function refreshRuleRendering() {
+    rebuildRuleEffects();
+    if (!Object.values(ruleSettings).some(Array.isArray)) return;
+    hideWireTooltip();
+    drawElevations();
+    drawDirectory();
+    drawCableList();
+    updateCableDetail();
+    refreshQuickView();
+    drawnMode = null;
+    invalidateRoutes();
+  }
+
+  function refreshFilteredRack() {
+    clearViewInteraction();
+    rebuildRuleEffects();
+    drawElevations();
+    drawDirectory();
+    drawCableList();
+    if (linkedCableId !== null) selectCable(cables.get(linkedCableId));
+    updateCableDetail();
+    refreshQuickView();
+    drawnMode = null;
+    invalidateRoutes();
+  }
+
+  function setFilterPreview(preview) {
+    filterPreview = preview;
+    get("filter-preview").hidden = !preview;
+    editor.querySelector(".re-rack-toolbar-controls").inert = Boolean(preview);
+    if (preview) {
+      const label = {interface: "Interface Rules", connection: "Connection Rules", device: "Device Rules"}[preview.kind];
+      get("filter-preview-label").textContent = label + " preview";
+      rackPlan?.clear();
+    }
+    refreshFilteredRack();
+    if (preview) get("filter-preview-back").focus();
   }
 
   function restoreRackView(settings) {
@@ -4854,7 +5601,7 @@
     lineModeChanged = false;
     restoreDisplayPreferences(settings.display);
     const rack = settings.rack ?? {};
-    const shared = savedViews?.activeId != null;
+    const shared = globalViewPreview || savedViews?.activeId != null;
     rackFaceOverride = enabled("rackSides") && rackFaces.includes(rack.face) ? rack.face : "";
     rackFace = enabled("rackSides") ? rackFaceOverride || viewDefaults.face || "front" : "front";
     focusedDevices.clear();
@@ -4885,18 +5632,26 @@
     if (enabled("vlan")) restoreSelect(vlanKind, rack.vlanKind);
     search.value = rack.search ?? "";
     offImage.checked = rack.offImage === true;
+    viewPositionIndicator.checked = rack.positionIndicator !== false;
     connectionSearch.value = rack.connectionSearch ?? "";
     restoreListFields(settings.listFields);
     setSelectedConnections(settings.selectedConnections, {redraw: false, preserveUnavailable: shared});
     setConnectionFilter(settings.connectionFilter);
+    setPortFilter(settings.portFilter, settings.portFilterAction);
+    for (const kind of Object.keys(ruleSettings)) {
+      ruleSettings[kind] = Array.isArray(settings[kind + "Rules"]) ? structuredClone(settings[kind + "Rules"]) : undefined;
+    }
+    rebuildRuleEffects();
     applyToolbarVisibility(settings.toolbar);
   }
 
   function applyToolbarVisibility(preferences) {
     toolbar.apply(preferences);
+    if (!toolbar.isVisible("zoom")) setPanMode(false);
     const quickFeature = {connect: "quickConnect", unplug: "unplug"}[quickMode];
     if (quickFeature && !toolbar.isVisible(quickFeature)) changeQuickMode("normal");
     rackPlan?.toolbarChanged();
+    positionIndicator?.refresh();
   }
 
   function renderRackView() {
@@ -4907,7 +5662,9 @@
     applyViewOptions();
     updateRoutingStyle();
     updateCableFocusControls();
-    connectionFilterOpen.hidden = lines.value !== "filtered";
+    connectionFilterOpen.hidden = false;
+    portFilterOpen.hidden = false;
+    deviceRulesOpen.hidden = false;
     updateSelectedConnectionControls();
     for (const input of deviceOptions.querySelectorAll('input[type="checkbox"]')) {
       input.checked = focusedDevices.has(Number(input.value));
@@ -4929,64 +5686,95 @@
     clearViewInteraction();
     quickSource = null;
     closeContextMenu();
+    if (savedViews.activeId !== "share-" + data.sharedCableView?.token) linkedCableId = null;
+    else linkedCableId = data.sharedCableView?.cableId ?? null;
     restoreRackView(settings);
     renderRackView();
     setZoom();
+    if (linkedCableId !== null) selectCable(cables.get(linkedCableId));
     persistViewFilters();
   }
 
   function canChangeSavedView() {
-    if (!busy && !pending && !stagedCount()) return true;
+    if (!filterPreview && !busy && !pending && !stagedCount()) return true;
     announce("Finish or clear the pending cable changes before changing views.", true);
     return false;
   }
 
   for (const device of data.devices) {
     for (const port of device.ports) {
-      ports.set(port.id, {...port, device});
+      ports.set(port.id, {...port, device, filterTrace: resolveFilterTrace(port.filterTrace)});
       portIdsByDataset.set(String(port.id), port.id);
     }
   }
   restoreRackView({
-    display: {...viewPreferences, images: viewPreferences.images ?? history.state?.reRackDeviceImages},
+    display: personalUsesSystemDefaults ? viewPreferences
+      : {...viewPreferences, images: viewPreferences.images ?? history.state?.reRackDeviceImages},
     rack: {
       ...rackPreferences, face: viewFilter("face"), devices: viewFilter("devices"), hiddenRows: viewFilter("hiddenRows"),
       cableDevice: viewFilter("cableDevice"), vlan: viewFilter("vlan"), vlanKind: viewFilter("vlanKind") || "any",
     },
-    listFields: readViewPreferences(listFieldsKey),
+    listFields: personalUsesSystemDefaults ? rackPreferences.listFields : readViewPreferences(listFieldsKey),
     selectedConnections: rackPreferences.selectedConnections,
     connectionFilter: rackPreferences.connectionFilter,
+    portFilter: rackPreferences.portFilter,
+    portFilterAction: rackPreferences.portFilterAction,
+    interfaceRules: rackPreferences.interfaceRules,
+    connectionRules: rackPreferences.connectionRules,
+    deviceRules: rackPreferences.deviceRules,
   });
-  const restore = history.state?.reRackEditor;
+  const restore = globalViewPreview ? null : history.state?.reRackEditor;
   savedViews = savedViewsApi.mount({
     get, config: data.savedViews, capture: captureRackView,
     apply: applySavedRackView, canSwitch: canChangeSavedView, requestMutation, toolbar, applyToolbarVisibility,
+    clearPersonal: clearPersonalRackSettings, preferSystemView, sharedCableView: data.sharedCableView,
   });
-  const restoredDraft = restore?.viewId === savedViews.activeId ? restore?.viewSettings : null;
+  const restoredDraft = linkedCableId === null && restore?.viewId === savedViews.activeId ? restore?.viewSettings : null;
   const initialView = restoredDraft ?? savedViews.initialSettings;
   if (initialView) restoreRackView(initialView);
   renderDeviceOptions();
   renderRackView();
   workspace.hidden = false;
-  announce(idleMessage());
-  const connectionFilterDialog = connectionFilterApi.createDialog({
-    dialog: get("connection-filter-dialog"),
-    vlan: enabled("vlan"),
-    getCatalog: () => ({cables: cables.values(), devices: data.devices, cableTypes: data.cableTypes, endpoint: cableEndpoint}),
-    getFilter: () => connectionFilter,
-    onApply: tree => {
-      setConnectionFilter(tree);
-      selectCable(null);
-      filterCableList();
-      drawnMode = null;
-      invalidateRoutes();
-      saveRackPreferences();
-    },
+  positionIndicator = globalThis.NbCableEditorPositionIndicator.mount({
+    scroll, board, panel: get("position-indicator"),
+    enabled: () => toolbar.isVisible("positionIndicator") && viewPositionIndicator.checked,
   });
-  connectionFilterOpen.addEventListener("click", () => {
-    if (!enabled("connectionFilter") || busy || pending) return;
-    hideWireTooltip();
-    connectionFilterDialog.open();
+  announce(idleMessage());
+  const filterEditorOptions = {
+    ...filterFeatures, destinationUrls: data.filterDestinationUrls,
+    getCatalog: () => ({cables: cables.values(), devices: data.devices, ports: ports.values(),
+      cableTypes: data.cableTypes, endpoint: cableEndpoint}),
+    onPreviewEnd: () => setFilterPreview(null),
+  };
+  const ruleDialogs = {};
+  const ruleButtons = {connection: connectionFilterOpen, interface: portFilterOpen, device: deviceRulesOpen};
+  for (const [kind, trigger] of Object.entries(ruleButtons)) {
+    const dialogName = {connection: "connection-filter-dialog", interface: "port-filter-dialog", device: "device-rules-dialog"}[kind];
+    const dialog = globalThis.NbCableEditorRuleEditor.createDialog({
+      ...filterEditorOptions, kind, dialog: get(dialogName),
+      getRules: () => rulesApi.normalize(kind, ruleSettings[kind], {
+        legacyFilter: kind === "connection" ? connectionFilter : kind === "interface" ? portFilter : undefined,
+        legacyAction: portFilterAction,
+      }),
+      onPreview: rules => setFilterPreview({kind, rules}),
+      onApply: rules => {
+        ruleSettings[kind] = structuredClone(rules);
+        refreshFilteredRack();
+        saveRackPreferences();
+      },
+    });
+    ruleDialogs[kind] = dialog;
+    trigger.addEventListener("click", () => {
+      if (!enabled("connectionFilter") || !canChangeSavedView()) return;
+      hideWireTooltip();
+      dialog.open();
+    });
+  }
+  get("filter-preview-back").addEventListener("click", () => ruleDialogs[filterPreview.kind].resume());
+  get("filter-preview-cancel").addEventListener("click", () => {
+    const kind = filterPreview.kind;
+    ruleDialogs[kind].cancelPreview();
+    ruleButtons[kind].focus();
   });
   cableFocusClear.addEventListener("click", () => setCableFocus(null));
 
@@ -4994,17 +5782,16 @@
     choice.addEventListener("click", () => applyRackFace(choice.dataset.rackFaceChoice));
   }
   get("view-reset-defaults").addEventListener("click", () => {
+    if (savedViews.activeId === null) {
+      savedViews.resetPersonal();
+      return;
+    }
     if (!canChangeSavedView()) return;
     const settings = captureRackView();
     const {vlanColors} = settings.display;
     settings.display = retainLockedPreferences({vlanColors}, settings.display, displayFeatures);
     settings.listFields = retainLockedPreferences({}, settings.listFields, listFeatures);
     if (enabled("rackSides")) settings.rack.face = "";
-    if (savedViews.activeId === null) {
-      writeViewPreferences(viewPreferencesKey, settings.display);
-      writeViewPreferences(listFieldsKey, settings.listFields);
-      history.replaceState({...history.state, reRackDeviceImages: null}, "");
-    }
     applySavedRackView(settings);
   });
   for (const control of quickButtons) {
@@ -5088,7 +5875,7 @@
         element.hidden = !control.checked;
       }
       if (savedViews.activeId === null) {
-        writeViewPreferences(listFieldsKey, {...readViewPreferences(listFieldsKey), [key]: control.checked});
+        savePersonalPreferences("listFields", listFieldsKey, {[key]: control.checked});
       }
     });
   }
@@ -5144,8 +5931,10 @@
     if (lines.value === "bundles" || lines.value === "filtered") selectCable(null);
     updateSelectedConnectionControls();
     updateRoutingStyle();
-    connectionFilterOpen.hidden = lines.value !== "filtered";
-    filterCableList();
+    connectionFilterOpen.hidden = false;
+    portFilterOpen.hidden = false;
+    deviceRulesOpen.hidden = false;
+    refreshFilteredRack();
     hideWireTooltip();
     applyElevationSpacing();
     invalidateRoutes();
@@ -5175,6 +5964,29 @@
     invalidateRoutes();
     saveViewPreferences("virtualCombine");
   });
+  for (const {key, control} of [{key: "externalLocations", control: viewExternalLocations}, ...traceDestinationOptions]) {
+    control.addEventListener("change", () => {
+      hideWireTooltip();
+      externalLocationUi.hide();
+      invalidateRoutes();
+      saveViewPreferences(key);
+    });
+  }
+  viewCompactEmptyUnits.addEventListener("change", () => {
+    if (busy || pending) {
+      viewCompactEmptyUnits.checked = !viewCompactEmptyUnits.checked;
+      return;
+    }
+    clearViewInteraction();
+    drawElevations();
+    refreshVisibleConnections();
+    renderPortRows();
+    saveViewPreferences("compactEmptyUnits");
+  });
+  viewPositionIndicator.addEventListener("change", () => {
+    positionIndicator.refresh();
+    saveRackPreferences();
+  });
   for (const [section, key] of [[connectionsSection, "connectionsOpen"], [directorySection, "directoryOpen"]]) {
     let lastOpen = section.open;
     section.addEventListener("toggle", () => {
@@ -5190,18 +6002,24 @@
     setZoom();
     saveViewPreferences("zoom");
   });
+  zoomIn.addEventListener("click", () => stepZoom(1.25));
+  zoomOut.addEventListener("click", () => stepZoom(.8));
+  panButton.addEventListener("click", () => setPanMode(!panMode));
+  panButton.addEventListener("keydown", event => {
+    if (!panMode || !canPanRack()) return;
+    const offset = {ArrowLeft: [-48, 0], ArrowRight: [48, 0], ArrowUp: [0, -48], ArrowDown: [0, 48]}[event.key];
+    if (!offset) return;
+    event.preventDefault();
+    scroll.scrollBy(...offset);
+  });
   cancel.addEventListener("click", clearOperation);
   const rackResize = new ResizeObserver(invalidateRoutes);
   rackResize.observe(scroll, {box: "border-box"});
-  for (const panel of [editor.querySelector(".re-rack-toolbar"), bundlePanel]) {
+  for (const panel of [editor.querySelector(".re-rack-toolbar"), bundlePanel, get("plan-bar"), pageFooter]) {
     if (panel) rackResize.observe(panel, {box: "border-box"});
   }
-  const resizeFit = () => {
-    if (isFitZoom()) invalidateRoutes();
-    else if (zoom.value === "custom") rackViewportHeight();
-  };
-  window.addEventListener("resize", resizeFit);
-  window.visualViewport?.addEventListener("resize", resizeFit);
+  window.addEventListener("resize", invalidateRoutes);
+  window.visualViewport?.addEventListener("resize", invalidateRoutes);
   window.addEventListener("pagehide", () => {
     if (zoomPreferenceTimer !== null || viewportZoom) saveCustomZoom();
   });
@@ -5271,6 +6089,8 @@
   moveDialog.addEventListener("close", clearOperation);
 
   get("modal-close").addEventListener("click", () => closeDetails(detailsDialog));
+  shareButton.addEventListener("click", () => copyCableLink(selectedCable));
+  get("cable-link-close").addEventListener("click", () => get("cable-link-dialog").close());
   get("port-modal-close").addEventListener("click", () => closeDetails(portDialog));
   deleteButton.addEventListener("click", async () => {
     if (!inlineEditors.has(detailsDialog) || await inlineEditors.get(detailsDialog).flush()) showDeleteConfirm(true);
@@ -5335,7 +6155,11 @@
   });
 
   editor.addEventListener("pointerdown", (event) => {
-    if (!event.isPrimary || event.button !== 0) return;
+    if (filterPreview || !event.isPrimary || event.button !== 0) return;
+    if (event.target.closest(".re-rack-viewport-controls, [data-position-indicator]")) {
+      finishPortClick();
+      return;
+    }
     suppressClick = false;
     hideWireTooltip();
     if (rackPlan?.inView()) {
@@ -5413,19 +6237,13 @@
     if (event.target === editor) cancelGesture(event);
   });
 
-  globalThis.NbCableEditorViewport.bind(scroll, {
+  viewport = globalThis.NbCableEditorViewport.bind(scroll, {
     scale: () => viewportZoom?.scale ?? zoomScale,
     anchorAt: rackAnchor,
-    zoomTo: (scale, anchor, point) => {
-      if (!viewportZoom) {
-        hideWireTooltip();
-        closeContextMenu(true);
-      }
-      viewportZoom = {scale: Math.max(minFitScale, Math.min(maxManualScale, scale)), anchor, point};
-      invalidateRoutes();
-    },
-    canZoom: event => enabled("zoom") && !busy && !pending &&
-      (event.type !== "wheel" || (!gesture?.moved && !rackPlan?.isDragging())),
+    zoomTo: setViewportZoom,
+    canZoom: () => enabled("zoom") && canPanRack(),
+    canPan: canPanRack,
+    panMode: () => panMode,
     canPanFrom: event => !event.target.closest(
       "a, button, input, select, textarea, [data-wire], [data-cable-bundle], [data-wire-sleeve], [data-plan-wire]",
     ) && !wirePortAt(event),
@@ -5441,7 +6259,7 @@
   });
 
   editor.addEventListener("click", (event) => {
-    if (busy || pending || (suppressClick && event.detail > 0)) return;
+    if (filterPreview || busy || pending || (suppressClick && event.detail > 0)) return;
     const port = portAt(event.target);
     if (rackPlan?.inView()) {
       const plannedWire = event.target.closest("[data-plan-wire]");
@@ -5467,7 +6285,7 @@
 
   editor.addEventListener("dblclick", (event) => {
     const port = portAt(event.target);
-    if (!port || suppressClick) return;
+    if (filterPreview || !port || suppressClick) return;
     event.preventDefault();
     if (rackPlan?.inView() && rackPlan.context(port)) return;
     openPortDetails(port);
@@ -5488,7 +6306,17 @@
   }, {capture: true});
 
   editor.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && panMode && !editor.querySelector("dialog[open]")) {
+      event.preventDefault();
+      setPanMode(false);
+      if (toolbar.isVisible("zoom")) panButton.focus({preventScroll: true});
+      return;
+    }
     if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+      if (panMode && event.target.closest("[data-scroll]") === scroll) {
+        event.preventDefault();
+        return;
+      }
       openContextMenu(event, true);
       return;
     }
@@ -5522,7 +6350,7 @@
     control?.focus({preventScroll: true});
   });
 
-  if (restore) {
+  if (restore && linkedCableId === null) {
     history.replaceState({...history.state, reRackEditor: null}, "");
     if (restore.queue && quickMode !== "normal") {
       for (const id of restore.queue.deletes) stagedDeletes.add(id);
@@ -5540,8 +6368,12 @@
   setZoom();
   saveRackPreferences();
   rackPlan = globalThis.NbCableEditorPlan?.({
-    editor, data, ports, portIdsByDataset, cables, get, node, button, httpUrl, requestMutation, describe, setError,
+    editor, data: inventory, ports, portIdsByDataset, cables, get, node, button, httpUrl, requestMutation, describe, setError,
     planningControlsVisible: () => toolbar.isVisible("planning"),
+    startInStock: linkedCableId !== null, portLocked: portLockedByFilter,
+    portConnectAllowed, portDisconnectAllowed, cableEditAllowed: cable => !cableLockedByFilter(cable),
+    operationAllowed: operation => plannedRuleLine(operation).actions.edit !== false,
+    operationDetailsAllowed: operation => plannedRuleLine(operation).actions.details !== false,
     refresh: updateMarks,
     redraw: scheduleDraw,
     refreshRoutes: invalidateRoutes,
@@ -5560,4 +6392,30 @@
     },
   });
   void rackPlan?.init();
+  if (linkedCableId !== null) {
+    const cable = cables.get(linkedCableId);
+    selectCable(cable);
+    requestAnimationFrame(() => {
+      const marker = [cable?.a, cable?.b].map(visibleMarker).find(Boolean);
+      if (marker) locateMarker(marker);
+      else if (cable) openCableDetails(cable);
+    });
+  } else if (data.cableShareUnavailable) {
+    announce("This cable link is unavailable.", true);
+  }
+
+  if (globalViewPreview && window.parent !== window) {
+    editor.addEventListener("click", event => {
+      if (event.target.closest?.("a[href]")) event.preventDefault();
+    });
+    window.addEventListener("message", event => {
+      if (event.origin !== location.origin || event.source !== window.parent ||
+          event.data?.type !== "nbcableeditor:global-preview-settings") return;
+      const {settings, requestId} = event.data;
+      if (!settings || typeof settings !== "object" || !Number.isSafeInteger(requestId)) return;
+      applySavedRackView(settings);
+      window.parent.postMessage({type: "nbcableeditor:global-preview-applied", rackId: data.rackId, requestId}, location.origin);
+    });
+    window.parent.postMessage({type: "nbcableeditor:global-preview-ready", rackId: data.rackId}, location.origin);
+  }
 })();

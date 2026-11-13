@@ -1,0 +1,100 @@
+.re-rack-external-location-badge {
+  position: absolute;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  box-sizing: border-box;
+  padding: 0 .5em;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .25rem;
+  background: color-mix(in srgb, var(--re-rack-surface) 92%, var(--re-rack-text));
+  color: color-mix(in srgb, var(--re-rack-text) 76%, var(--re-rack-surface));
+  font-family: inherit;
+  font-size: clamp(7px, calc(var(--re-rack-zoom, 1) * 10px), 12px);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.re-rack-external-location-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.re-rack-external-location-badge[data-trace-destination] {
+  border-style: dashed;
+}
+
+button.re-rack-external-location-badge {
+  pointer-events: auto;
+  cursor: help;
+}
+
+button.re-rack-external-location-badge:is(:hover, :focus-visible) {
+  border-color: var(--re-rack-target);
+  color: var(--re-rack-text);
+}
+
+button.re-rack-external-location-badge:focus-visible {
+  outline: 1px solid var(--re-rack-target);
+  outline-offset: 1px;
+}
+
+.re-rack-external-location-tooltip:not([hidden]) {
+  position: fixed;
+  z-index: 1081;
+  display: grid;
+  gap: .35rem;
+  width: max-content;
+  max-width: min(21rem, calc(100vw - 1rem));
+  max-height: min(20rem, calc(100vh - 1rem));
+  padding: .5rem .65rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--re-rack-border);
+  border-radius: .4rem;
+  background: var(--re-rack-surface);
+  color: var(--re-rack-text);
+  box-shadow: 0 .15rem .45rem #11182724, 0 .55rem 1.6rem #11182720;
+  font-size: .75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.re-rack-external-location-title {
+  font-size: .875rem;
+}
+
+.re-rack-external-location-heading {
+  display: grid;
+  gap: .1rem;
+}
+
+.re-rack-external-location-kind {
+  color: color-mix(in srgb, var(--re-rack-text) 76%, var(--re-rack-surface));
+}
+
+.re-rack-external-location-places {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: .12rem .4rem;
+  margin: 0;
+}
+
+.re-rack-external-location-places dt {
+  font-weight: 500;
+  color: color-mix(in srgb, var(--re-rack-text) 76%, var(--re-rack-surface));
+}
+
+.re-rack-external-location-places dd { margin: 0; }
+
+.re-rack-external-location-devices {
+  display: grid;
+  gap: .2rem;
+  margin: 0;
+  padding: .35rem 0 0;
+  border-top: 1px solid var(--re-rack-border);
+  list-style: none;
+}

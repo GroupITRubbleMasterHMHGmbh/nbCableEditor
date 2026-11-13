@@ -3,7 +3,9 @@
 
   globalThis.NbCableEditorPlan = ({editor, data, ports, portIdsByDataset, cables, get, node, button, httpUrl, requestMutation,
     describe, setError, refresh, redraw, refreshRoutes, onViewChange, canEnter, locatePort,
-    planningControlsVisible = () => true}) => {
+    planningControlsVisible = () => true, startInStock = false, portLocked = () => false,
+    portConnectAllowed = () => true, portDisconnectAllowed = () => true, cableEditAllowed = () => true,
+    operationAllowed = () => true, operationDetailsAllowed = () => true}) => {
     const config = data.planning;
     if (!config) return null;
     const selector = config.url ? get("plan-select") : null;
@@ -49,6 +51,18 @@
     const planUrl = id => new URL(encodeURIComponent(id) + "/", httpUrl(config.url)).href;
     const portDescription = id => ports.has(id) ? describe(ports.get(id)) : id || "Outside this rack";
     const originalEnd = (operation, end) => operation.before?.[end] ?? cables.get(operation.cable_id)?.[end];
+    function operationLocked(operation) {
+      if (!operationAllowed(operation)) return true;
+      const before = [originalEnd(operation, "a"), originalEnd(operation, "b")];
+      const after = [operation.a, operation.b];
+      if ([...before, ...after].filter(Boolean).some(portLocked)) return true;
+      const cable = cables.get(operation.cable_id);
+      if (cable && !cableEditAllowed(cable)) return true;
+      if (operation.action === "add") return after.some(id => !portConnectAllowed(id));
+      if (operation.action === "delete") return before.some(id => !portDisconnectAllowed(id));
+      return before.some((id, index) => id !== after[index] && !portDisconnectAllowed(id)) ||
+        after.some((id, index) => id !== before[index] && !portConnectAllowed(id));
+    }
     const operationName = {add: "Connect", move: "Move", delete: "Unplug"};
     const addButton = (label, action, style = "outline-secondary") => {
       const control = button("btn btn-sm btn-" + style, label);
@@ -123,7 +137,7 @@
       get("plan-indicator").textContent = plan?.applied ? "Applied" : "Draft";
       get("plan-opacity-control").hidden = view.value !== "mixed";
       get("plan-changes").textContent = "Changes (" + operations().length + ")";
-      get("plan-apply").disabled = !editing() || operations().length === 0;
+      get("plan-apply").disabled = !editing() || operations().length === 0 || operations().some(operationLocked);
       get("plan-port-actions").disabled = !editing() || !source;
       updateOpacity();
       if (previousMode !== view.value) onViewChange();
@@ -437,26 +451,28 @@
     }
 
     function canUse(port) {
-      return port && !port.blocked && ["free", "cabled"].includes(port.occupancy);
+      return port && !portLocked(port.id) && !port.blocked && ["free", "cabled"].includes(port.occupancy);
     }
 
     function canDrag(port) {
       if (!editing() || pending || !canUse(port)) return false;
       const connection = port.id === source?.id && sourceConnection || cableAtPort(port);
-      if (!connection) return false;
-      if (connection.action === "stock") return connection.cable.editable;
-      if (["free", "released"].includes(connection.action)) return data.canAdd;
-      return true;
+      if (!connection || [connection.a, connection.b].some(portLocked)) return false;
+      if (connection.action === "stock") {
+        return connection.cable.editable && cableEditAllowed(connection.cable) && portDisconnectAllowed(port.id);
+      }
+      if (["free", "released"].includes(connection.action)) return data.canAdd && portConnectAllowed(port.id);
+      return !operationLocked(connection);
     }
 
     function canTarget(port) {
-      if (!source || !canUse(port) || source.id === port.id) return false;
+      if (!source || !canUse(port) || !portConnectAllowed(port.id) || source.id === port.id) return false;
       const connection = sourceConnection ?? cableAtPort(source);
       return connection && ![connection.a, connection.b].includes(port.id);
     }
 
     function chooseSource(port, connection = cableAtPort(port)) {
-      if (!editing() || pending || !port) return;
+      if (!editing() || pending || !canUse(port)) return;
       source = port;
       sourceConnection = connection;
       const moving = connection && connection.a && connection.b;
@@ -494,6 +510,7 @@
     }
 
     async function stage(operation, notice) {
+      if (operationLocked(operation)) throw new Error("Editing is disabled by the active rules.");
       const next = changesWith(operation);
       const reverted = operation.action === "move" && operation.a === originalEnd(operation, "a") &&
         operation.b === originalEnd(operation, "b");
@@ -622,7 +639,7 @@
     }
 
     function showPortActions(port = source) {
-      if (!port || !editing()) return;
+      if (!port || portLocked(port.id) || !editing()) return;
       showDialog("Plan port actions");
       const connection = cableAtPort(port);
       const portState = plannedPort(port.id);
@@ -644,7 +661,8 @@
         dialog.close();
         chooseSource(port);
       }, "primary"));
-      if (!connection && stockCable?.editable && !changesByCable.has(stockCable.id)) {
+      if (!connection && stockCable?.editable && cableEditAllowed(stockCable) &&
+          portDisconnectAllowed(port.id) && !changesByCable.has(stockCable.id)) {
         buttons.push(addButton("Move inventory cable end", () => {
           dialog.close();
           chooseSource(port, {action: "stock", cable: stockCable, a: stockCable.a, b: stockCable.b});
@@ -652,6 +670,7 @@
       }
       if (!connection) {
         for (const draft of operationsByPort.get(port.id) ?? []) {
+          if (operationLocked(draft)) continue;
           const other = draft.a === port.id ? draft.b : draft.a;
           buttons.push(addButton("Move end for " + portDescription(other), () => {
             dialog.close();
@@ -659,8 +678,12 @@
           }));
         }
       }
-      if (connection?.action === "add") buttons.push(addButton("Edit planned cable", () => showAdd(connection)));
-      if (stockCable?.deletable && data.canDelete && (!changesByCable.has(stockCable.id) || connection?.action === "move")) {
+      if (connection?.action === "add" && !operationLocked(connection)) {
+        buttons.push(addButton("Edit planned cable", () => showAdd(connection)));
+      }
+      if (stockCable?.deletable && data.canDelete && cableEditAllowed(stockCable) &&
+          [stockCable.a, stockCable.b].every(portDisconnectAllowed) &&
+          (!changesByCable.has(stockCable.id) || connection?.action === "move")) {
         buttons.push(addButton("Plan unplug", () => confirmUnplug(port, stockCable, changesByCable.get(stockCable.id)), "outline-danger"));
       }
       for (const operation of related) {
@@ -693,7 +716,7 @@
           (item.action === "move" ? "After · " : "") + portDescription(item.a) + " ↔ " + portDescription(item.b)));
         row.append(route);
         const controls = node("div", "re-rack-plan-row-actions");
-        if (editable && item.action === "add") {
+        if (editable && item.action === "add" && !operationLocked(item)) {
           controls.append(addButton("Edit cable", () => showAdd(item, recommended.get(String(item.id)))));
         }
         if (editable) controls.append(addButton("Remove", () => removeChange(item)));
@@ -832,6 +855,10 @@
     }
 
     async function showPreview() {
+      if (operations().some(operationLocked)) {
+        notify("A cable change in this plan is disabled by the active rules.", true);
+        return;
+      }
       showDialog("Review and apply · " + plan.name);
       content.append(description(calculatorAvailable
         ? "Checking occupancy, permissions and cable lengths…" : "Checking occupancy and permissions…"));
@@ -859,6 +886,7 @@
         apply.disabled = !preview.token;
         form.append(actions(addButton("Close", () => dialog.close()), apply));
         submitted(form, async () => {
+          if (operations().some(operationLocked)) throw new Error("Editing is disabled by the active rules.");
           await write({action: "apply", token: preview.token, status: status.value});
           view.value = "stock";
           remember();
@@ -902,7 +930,8 @@
         plans = result.plans ?? [];
         syncPlans();
         if (plans.some(item => String(item.id) === String(preferences.id))) {
-          await load(preferences.id, ["stock", "plan"].includes(preferences.view) ? preferences.view : "mixed");
+          await load(preferences.id, startInStock ? "stock" :
+            ["stock", "plan"].includes(preferences.view) ? preferences.view : "mixed");
         }
       } catch (error) {
         notify(error.message, true);
@@ -988,7 +1017,8 @@
         if (!operation) return;
         draftCable = operation;
         refresh();
-        if (editing() && operation.action === "add") showAdd(operation);
+        if (!operationDetailsAllowed(operation)) return;
+        if (editing() && operation.action === "add" && !operationLocked(operation)) showAdd(operation);
         else showChanges();
       },
       isDragging: () => Boolean(pointer?.moved),
@@ -1005,7 +1035,7 @@
         else chooseSource(port);
       },
       context(port) {
-        if (!editing() || !port) return false;
+        if (!editing() || !port || portLocked(port.id)) return false;
         chooseSource(port);
         showPortActions(port);
         return true;

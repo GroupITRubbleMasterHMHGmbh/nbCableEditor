@@ -41,7 +41,7 @@
       }
       const keys = new Set([...Object.keys(features), ...Object.keys(defaults), ...Object.keys(visibility)]);
       editor.dataset.rackHiddenFeatures = [...keys].filter(key => !isVisible(key)).join(" ");
-      scroll.setAttribute("aria-description", isEnabled("zoom") ? "Use the mouse wheel or pinch to zoom. " + panHelp : panHelp);
+      scroll.setAttribute("aria-description", isEnabled("zoom") ? panHelp + " Pinch to zoom on a touch screen." : panHelp);
     }
 
     function snapshot() {

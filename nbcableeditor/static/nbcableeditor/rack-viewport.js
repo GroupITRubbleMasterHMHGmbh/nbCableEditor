@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  function bind(scroll, {scale, anchorAt, zoomTo, canZoom, canPanFrom, startPan, cancelCableDrag}) {
+  function bind(scroll, {scale, anchorAt, zoomTo, canZoom, canPan, canPanFrom, panMode, startPan, cancelCableDrag}) {
     const touches = new Map();
     let pan = null;
     let pinch = null;
@@ -32,8 +32,10 @@
     scroll.addEventListener("pointerdown", event => {
       if (!event.isPrimary && event.pointerType !== "touch") return;
       const rect = scroll.getBoundingClientRect();
-      if (event.clientX >= rect.left + scroll.clientLeft + scroll.clientWidth ||
-          event.clientY >= rect.top + scroll.clientTop + scroll.clientHeight) return;
+      const left = rect.left + scroll.clientLeft;
+      const top = rect.top + scroll.clientTop;
+      if (event.clientX < left || event.clientX >= left + scroll.clientWidth ||
+          event.clientY < top || event.clientY >= top + scroll.clientHeight) return;
       if (event.pointerType === "touch") {
         touches.set(event.pointerId, point(event));
         if (touches.size >= 2 && canZoom(event)) {
@@ -44,7 +46,14 @@
         }
       }
       if (event.isPrimary && event.button === 0) suppressClick = false;
-      if (pan || !canZoom(event) || !(event.button === 1 && event.pointerType === "mouse" ||
+      const explicit = panMode() && event.button === 0;
+      if (explicit) {
+        // Capture the press before a cable, port or device link can start an action.
+        suppressClick = true;
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      if (pan || !canPan() || !(explicit || event.button === 1 && event.pointerType === "mouse" ||
           event.button === 0 && canPanFrom(event))) return;
       if (event.button === 1) event.preventDefault();
       pan = {id: event.pointerId, point: point(event), moved: false};
@@ -109,23 +118,28 @@
 
     for (const type of ["click", "dblclick", "auxclick"]) {
       scroll.addEventListener(type, event => {
-        if (event.button !== 1 && (!suppressClick || !event.detail)) return;
+        if (event.button !== 1 && (!event.detail || !(suppressClick || panMode()))) return;
         event.preventDefault();
         event.stopPropagation();
       }, {capture: true});
     }
+    scroll.addEventListener("contextmenu", event => {
+      if (!panMode()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, {capture: true});
     scroll.addEventListener("dragstart", event => {
       if (pan) event.preventDefault();
     });
-    scroll.addEventListener("wheel", event => {
-      if (!canZoom(event) || pinch || pan?.moved || event.shiftKey ||
-          Math.abs(event.deltaX) > Math.abs(event.deltaY) || !event.deltaY) return;
-      event.preventDefault();
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroll.clientHeight : 1;
-      const delta = Math.max(-140, Math.min(140, event.deltaY * unit));
-      const cursor = point(event);
-      zoomTo(scale() * Math.exp(-delta * .002), anchorAt(cursor), cursor);
-    }, {passive: false});
+
+    return {
+      cancelPan() {
+        const id = pan?.id;
+        pan = null;
+        scroll.removeAttribute("data-panning");
+        if (id != null && scroll.hasPointerCapture(id)) scroll.releasePointerCapture(id);
+      },
+    };
   }
 
   globalThis.NbCableEditorViewport = {bind};
